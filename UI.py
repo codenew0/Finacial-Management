@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datetime import datetime, date
-import calendar
 import matplotlib.font_manager as fm
 import warnings
 
@@ -45,6 +44,278 @@ def setup_japanese_font():
         plt.rcParams['font.family'] = 'DejaVu Sans'
 
 
+class TreeviewTooltip:
+    """Treeview用のツールチップクラス。
+
+    このクラスは、Treeviewの特定のセルにマウスを重ねたときに
+    詳細情報を表示するツールチップ機能を提供します。
+    """
+    def __init__(self, treeview, parent_app):
+        self.treeview = treeview
+        self.parent_app = parent_app
+        self.tooltip_window = None
+        self.current_item = None
+        self.current_column = None
+
+        # マウスイベントをバインド
+        self.treeview.bind('<Motion>', self._on_mouse_motion)
+        self.treeview.bind('<Leave>', self._on_mouse_leave)
+
+    def _on_mouse_motion(self, event):
+        """マウスが動いたときの処理。"""
+        # 現在のマウス位置から行と列を特定
+        item = self.treeview.identify_row(event.y)
+        column = self.treeview.identify_column(event.x)
+
+        # 無効な位置の場合はツールチップを非表示
+        if not item or not column:
+            self._hide_tooltip()
+            return
+
+        # 前回と同じセルの場合は何もしない
+        if item == self.current_item and column == self.current_column:
+            return
+
+        # 新しいセルに移動した
+        self.current_item = item
+        self.current_column = column
+
+        # 列インデックスを取得（#1, #2 などから数値を抽出）
+        col_index = int(column[1:]) - 1
+
+        # 日付列や＋ボタン列の場合はツールチップを表示しない
+        all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
+        if col_index == 0 or col_index >= len(all_columns):
+            self._hide_tooltip()
+            return
+
+        # 行の値を取得
+        row_values = self.treeview.item(item, 'values')
+        if not row_values:
+            self._hide_tooltip()
+            return
+
+        # セルの値を確認（空または0の場合はツールチップを表示しない）
+        cell_value = str(row_values[col_index]).strip() if col_index < len(row_values) else ""
+        if not cell_value or cell_value == "0":
+            self._hide_tooltip()
+            return
+
+        # 合計行とまとめ行の判定
+        items = self.treeview.get_children()
+        if len(items) < 2:
+            self._hide_tooltip()
+            return
+
+        total_row_id = items[-2]
+        summary_row_id = items[-1]
+
+        # 合計行の場合は特別な処理
+        if item == total_row_id:
+            self._show_total_tooltip(event, col_index)
+            return
+
+        # まとめ行の場合
+        if item == summary_row_id:
+            if col_index == 3:  # 収入列
+                self._show_income_tooltip(event)
+            elif col_index == 5:  # 支出列
+                self._show_expense_tooltip(event)
+            else:
+                self._hide_tooltip()
+            return
+
+        # 通常の日付行の場合
+        try:
+            day = int(str(row_values[0]).strip())
+            self._show_detail_tooltip(event, day, col_index)
+        except ValueError:
+            self._hide_tooltip()
+
+    def _show_detail_tooltip(self, event, day, col_index):
+        """通常セルの詳細をツールチップで表示。"""
+        # child_dataからデータを取得
+        dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-{day}-{col_index}"
+        data_list = self.parent_app.child_data.get(dict_key, [])
+
+        if not data_list:
+            self._hide_tooltip()
+            return
+
+        # ツールチップの内容を作成
+        lines = []
+        total = 0
+
+        for row in data_list:
+            if len(row) >= 3:
+                partner = str(row[0]).strip() if row[0] else "（未入力）"
+                amount_str = str(row[1]).strip() if row[1] else "0"
+                detail = str(row[2]).strip() if row[2] else ""
+
+                # 金額を数値に変換
+                try:
+                    amount = int(amount_str.replace(',', '').replace('¥', ''))
+                    total += amount
+                    amount_display = f"¥{amount:,}"
+                except ValueError:
+                    amount_display = amount_str
+
+                # 1行の情報を作成
+                line = f"• {partner}: {amount_display}"
+                if detail:
+                    line += f" ({detail})"
+                lines.append(line)
+
+        # 合計行を追加
+        if len(data_list) > 1:
+            lines.append("─" * 30)
+            lines.append(f"合計: ¥{total:,}")
+
+        # ツールチップを表示
+        self._show_tooltip(event, "\n".join(lines))
+
+    def _show_total_tooltip(self, event, col_index):
+        """合計行のツールチップを表示。"""
+        # その列の全日付のデータを集計
+        all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
+        column_name = all_columns[col_index] if col_index < len(all_columns) else "不明"
+
+        days_with_data = []
+        total = 0
+
+        # 月の日数を取得
+        days_in_month = self.parent_app._get_days_in_month(self.parent_app.current_month)
+
+        for day in range(1, days_in_month + 1):
+            dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-{day}-{col_index}"
+            if dict_key in self.parent_app.child_data:
+                data_list = self.parent_app.child_data[dict_key]
+                day_total = 0
+                for row in data_list:
+                    if len(row) > 1:
+                        try:
+                            amount = int(str(row[1]).replace(',', '').replace('¥', ''))
+                            day_total += amount
+                        except ValueError:
+                            pass
+
+                if day_total > 0:
+                    days_with_data.append(f"{day}日: ¥{day_total:,}")
+                    total += day_total
+
+        if days_with_data:
+            lines = [f"【{column_name}の内訳】"]
+            lines.extend(days_with_data[:10])  # 最大10日分まで表示
+            if len(days_with_data) > 10:
+                lines.append(f"... 他{len(days_with_data) - 10}日分")
+            lines.append("─" * 30)
+            lines.append(f"合計: ¥{total:,}")
+
+            self._show_tooltip(event, "\n".join(lines))
+        else:
+            self._hide_tooltip()
+
+    def _show_income_tooltip(self, event):
+        """収入のツールチップを表示。"""
+        dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-0-3"
+        data_list = self.parent_app.child_data.get(dict_key, [])
+
+        if not data_list:
+            self._hide_tooltip()
+            return
+
+        lines = ["【収入の内訳】"]
+        total = 0
+
+        for row in data_list:
+            if len(row) >= 3:
+                source = str(row[0]).strip() if row[0] else "（未入力）"
+                amount_str = str(row[1]).strip() if row[1] else "0"
+                detail = str(row[2]).strip() if row[2] else ""
+
+                try:
+                    amount = int(amount_str.replace(',', '').replace('¥', ''))
+                    total += amount
+                    amount_display = f"¥{amount:,}"
+                except ValueError:
+                    amount_display = amount_str
+
+                line = f"• {source}: {amount_display}"
+                if detail:
+                    line += f" ({detail})"
+                lines.append(line)
+
+        if len(data_list) > 1:
+            lines.append("─" * 30)
+            lines.append(f"合計: ¥{total:,}")
+
+        self._show_tooltip(event, "\n".join(lines))
+
+    def _show_expense_tooltip(self, event):
+        """支出合計のツールチップを表示。"""
+        # 全項目の支出を集計
+        lines = ["【支出の内訳】"]
+        all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
+        grand_total = 0
+
+        for col_index in range(1, len(all_columns)):  # 日付列を除く
+            column_total = 0
+            column_name = all_columns[col_index]
+
+            # その列の全日付を集計
+            days_in_month = self.parent_app._get_days_in_month(self.parent_app.current_month)
+            for day in range(1, days_in_month + 1):
+                dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-{day}-{col_index}"
+                if dict_key in self.parent_app.child_data:
+                    for row in self.parent_app.child_data[dict_key]:
+                        if len(row) > 1:
+                            try:
+                                amount = int(str(row[1]).replace(',', '').replace('¥', ''))
+                                column_total += amount
+                            except ValueError:
+                                pass
+
+            if column_total > 0:
+                lines.append(f"• {column_name}: ¥{column_total:,}")
+                grand_total += column_total
+
+        lines.append("─" * 30)
+        lines.append(f"合計: ¥{grand_total:,}")
+
+        self._show_tooltip(event, "\n".join(lines))
+
+    def _show_tooltip(self, event, text):
+        """ツールチップを表示。"""
+        self._hide_tooltip()
+
+        # ツールチップウィンドウを作成
+        self.tooltip_window = tk.Toplevel(self.treeview)
+        self.tooltip_window.wm_overrideredirect(True)
+        self.tooltip_window.wm_geometry(f"+{event.x_root + 10}+{event.y_root + 10}")
+
+        # ツールチップの内容を設定
+        label = tk.Label(self.tooltip_window,
+                         text=text,
+                         justify=tk.LEFT,
+                         background="#ffffcc",
+                         relief=tk.SOLID,
+                         borderwidth=1,
+                         font=("Arial", 9))
+        label.pack()
+
+    def _hide_tooltip(self):
+        """ツールチップを非表示。"""
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
+        self.current_item = None
+        self.current_column = None
+
+    def _on_mouse_leave(self, event):
+        """マウスがTreeviewから離れたときの処理。"""
+        self._hide_tooltip()
+
+
 class MonthlyDataDialog(tk.Toplevel):
     def __init__(self, parent, parent_app, year, month):
         """月間データダイアログの初期化。
@@ -55,10 +326,14 @@ class MonthlyDataDialog(tk.Toplevel):
         データを一覧表示する機能を提供します。
         """
         super().__init__(parent)
-        self.parent_app = parent_app  # メインアプリケーションへの参照
-        self.year = year  # 表示対象の年
-        self.month = month  # 表示対象の月
-        self.monthly_data = []  # 月間データを格納するリスト
+        self.parent_app = parent_app
+        self.year = year
+        self.month = month
+        self.monthly_data = []
+
+        # ソート関連の変数を追加
+        self.sort_column = None  # 現在ソートされている列
+        self.sort_reverse = False  # ソートの方向（False=昇順、True=降順）
 
         # ダイアログの基本サイズを設定
         # これらの値は、データを快適に閲覧できる適切なサイズです
@@ -125,12 +400,14 @@ class MonthlyDataDialog(tk.Toplevel):
         result_frame.grid_columnconfigure(0, weight=1)
 
         # データ表示用のTreeviewウィジェット
-        # 表形式でデータを整理して表示するため、5つの列を定義します
         columns = ["年月日", "項目", "取引先", "金額", "詳細"]
         self.result_tree = ttk.Treeview(result_frame, columns=columns, show="headings", height=15)
 
         # 各列のヘッダーと幅を設定
-        # 列幅は内容に応じて最適化されています
+        for col in columns:
+            self.result_tree.heading(col, text=col, command=lambda c=col: self._sort_by_column(c))
+
+        # 列幅の設定は既存のまま
         self.result_tree.heading("年月日", text="年月日")
         self.result_tree.heading("項目", text="項目")
         self.result_tree.heading("取引先", text="取引先")
@@ -190,15 +467,95 @@ class MonthlyDataDialog(tk.Toplevel):
 
         self.result_tree.bind("<MouseWheel>", on_mousewheel)
 
-    def _load_monthly_data(self):
-        """月間データを読み込んで表示。
+    def _sort_by_column(self, column):
+        """指定された列でデータをソートする。
 
-        このメソッドは、parent_appのchild_dataから指定された年月の
-        データを抽出し、整理してTreeviewに表示します。また、統計
-        情報も同時に計算して表示します。
+        このメソッドは列ヘッダーがクリックされたときに呼び出されます。
+        同じ列を再度クリックすると、ソート順が反転します。
         """
+        # 同じ列をクリックした場合は、ソート順を反転
+        if self.sort_column == column:
+            self.sort_reverse = not self.sort_reverse
+        else:
+            # 新しい列の場合は、昇順から開始
+            self.sort_column = column
+            self.sort_reverse = False
+
+        # ソートキーを決定する関数を定義
+        # この関数は各データ項目から比較用の値を抽出します
+        def get_sort_key(item):
+            if column == "年月日":
+                # 日付は既にsort_keyとして保存してあるので、それを使用
+                return item['sort_key']
+            elif column == "項目":
+                return item['column']
+            elif column == "取引先":
+                return item['partner']
+            elif column == "金額":
+                # 金額は数値として比較するため、amount_valueを使用
+                return item['amount_value']
+            elif column == "詳細":
+                return item['detail']
+            else:
+                return ""
+
+        # データをソート
+        self.monthly_data.sort(key=get_sort_key, reverse=self.sort_reverse)
+
+        # Treeviewを再表示
+        self._refresh_treeview()
+
+        # 視覚的フィードバックのため、ソート中の列を示す
+        self._update_column_headers()
+
+    def _refresh_treeview(self):
+        """ソート後のデータでTreeviewを再表示する。
+
+        このメソッドは既存の表示をクリアし、
+        現在のmonthly_dataの順序で再度データを挿入します。
+        """
+        # 既存の表示をクリア
+        for item in self.result_tree.get_children():
+            self.result_tree.delete(item)
+
+        # ソート済みのデータを表示
+        for result in self.monthly_data:
+            values = [
+                result['date'],
+                result['column'],
+                result['partner'],
+                result['amount'],
+                result['detail']
+            ]
+            self.result_tree.insert("", "end", values=values)
+
+        # 結果カウントは変わらないが、念のため更新
+        self.result_label.config(text=f"データ: {len(self.monthly_data)} 件")
+
+    def _update_column_headers(self):
+        """ソート状態を示すため、列ヘッダーの表示を更新する。
+
+        現在ソートされている列には、昇順なら▲、降順なら▼を付けます。
+        これにより、ユーザーは現在のソート状態を一目で確認できます。
+        """
+        columns = ["年月日", "項目", "取引先", "金額", "詳細"]
+
+        for col in columns:
+            if col == self.sort_column:
+                # ソート中の列には矢印を付ける
+                if self.sort_reverse:
+                    # 降順の場合は下向き矢印
+                    self.result_tree.heading(col, text=f"{col} ▼")
+                else:
+                    # 昇順の場合は上向き矢印
+                    self.result_tree.heading(col, text=f"{col} ▲")
+            else:
+                # ソートされていない列は通常の表示
+                self.result_tree.heading(col, text=col)
+
+    def _load_monthly_data(self):
+        """月間データを読み込んで表示。"""
         # 既存の表示内容をクリア
-        # 新しいデータを表示する前に、前回の内容を削除します
         for item in self.result_tree.get_children():
             self.result_tree.delete(item)
 
@@ -208,11 +565,9 @@ class MonthlyDataDialog(tk.Toplevel):
         total_count = 0  # 取引件数
 
         # child_dataから該当月のデータを検索
-        # parent_appに格納されている全データから必要な月のデータのみを抽出します
         for dict_key, data_list in self.parent_app.child_data.items():
             try:
                 # キーを解析して年月日と項目インデックスを取得
-                # キーの形式: "年-月-日-列インデックス"
                 parts = dict_key.split("-")
                 if len(parts) == 4:
                     year = int(parts[0])
@@ -220,10 +575,13 @@ class MonthlyDataDialog(tk.Toplevel):
                     day = int(parts[2])
                     col_index = int(parts[3])
 
+                    # まとめ行（day=0）はスキップ - この行を追加
+                    if day == 0:
+                        continue
+
                     # 指定された年月と一致するデータのみを処理
                     if year == self.year and month == self.month:
                         # 項目名を取得
-                        # 列インデックスから実際の項目名を特定します
                         all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
                         if col_index < len(all_columns):
                             column_name = all_columns[col_index]
@@ -234,7 +592,6 @@ class MonthlyDataDialog(tk.Toplevel):
                         date_str = f"{year}/{month:02d}/{day:02d}"
 
                         # 各取引データを処理
-                        # data_listには複数の取引が含まれている可能性があります
                         for row in data_list:
                             if len(row) >= 3:  # 最低限必要なデータが揃っている場合のみ処理
                                 # 各フィールドのデータを安全に取得
@@ -243,7 +600,6 @@ class MonthlyDataDialog(tk.Toplevel):
                                 detail = str(row[2]).strip() if row[2] else ""
 
                                 # 金額の数値変換処理
-                                # 文字列から数値を抽出して統計計算に使用します
                                 amount_value = 0
                                 if amount_str:
                                     try:
@@ -256,7 +612,6 @@ class MonthlyDataDialog(tk.Toplevel):
                                         amount_value = 0
 
                                 # 結果データの構造化
-                                # 表示と統計計算の両方に使用するデータ構造を作成します
                                 result = {
                                     'date': date_str,
                                     'column': column_name,
@@ -276,11 +631,13 @@ class MonthlyDataDialog(tk.Toplevel):
                 continue
 
         # 結果を日付順にソート
-        # ユーザーが時系列でデータを確認できるように整理します
         self.monthly_data.sort(key=lambda x: x['sort_key'])
 
+        # デフォルトのソート状態を設定
+        self.sort_column = "年月日"
+        self.sort_reverse = False
+
         # 結果をTreeviewに表示
-        # 整理されたデータを表形式で表示します
         for result in self.monthly_data:
             values = [
                 result['date'],
@@ -291,8 +648,10 @@ class MonthlyDataDialog(tk.Toplevel):
             ]
             self.result_tree.insert("", "end", values=values)
 
+        # 列ヘッダーを更新して、現在のソート状態を表示
+        self._update_column_headers()
+
         # 統計情報の計算と表示
-        # ユーザーに有用な統計データを提供します
         if total_count > 0:
             avg_amount = total_amount / total_count
             self.stats_label.config(text=f"合計金額: ¥{total_amount:,} | 平均金額: ¥{avg_amount:.0f}")
@@ -300,7 +659,6 @@ class MonthlyDataDialog(tk.Toplevel):
             self.stats_label.config(text="")
 
         # 結果カウントの更新
-        # データ件数をユーザーに表示します
         self.result_label.config(text=f"データ: {len(self.monthly_data)} 件")
 
         # 処理完了のログ出力
@@ -598,8 +956,8 @@ class ChartDialog(tk.Toplevel):
         self.parent_app = parent_app
 
         # ダイアログの設定（サイズを小さく修正）
-        dialog_width = 800  # 元: 1000
-        dialog_height = 600  # 元: 700
+        dialog_width = 900
+        dialog_height = 600
 
         # 親ウィンドウの中央に配置
         parent_x = self.master.winfo_x()
@@ -635,7 +993,7 @@ class ChartDialog(tk.Toplevel):
     def _create_widgets(self):
         """ウィジェットを作成。"""
         # グリッドの重み設定
-        self.grid_rowconfigure(2, weight=1)  # チャートエリアの行番号を2に変更
+        self.grid_rowconfigure(1, weight=1)  # チャートエリアを1に変更
         self.grid_columnconfigure(0, weight=1)
 
         # タイトル部分
@@ -646,43 +1004,47 @@ class ChartDialog(tk.Toplevel):
                                font=('Arial', 16, 'bold'), bg='#f0f0f0')
         title_label.pack()
 
-        # 総支出・総収入ボタンフレーム（新規追加）
-        summary_frame = tk.Frame(self, bg='#f0f0f0')
-        summary_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        # タブフレーム（総支出・総収入ボタンと項目タブを同じフレームに配置）
+        tab_frame = tk.Frame(self, bg='#f0f0f0')
+        tab_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
+
+        # 左側に総支出・総収入ボタンを配置
+        summary_button_frame = tk.Frame(tab_frame, bg='#f0f0f0')
+        summary_button_frame.pack(side=tk.LEFT, padx=(0, 15))  # 右側に余白を追加
 
         # 総支出ボタン
-        total_expense_btn = tk.Button(summary_frame, text="総支出",
-                                      font=('Arial', 12, 'bold'),
+        total_expense_btn = tk.Button(summary_button_frame, text="総支出",
+                                      font=('Arial', 11, 'bold'),
                                       bg='#f44336', fg='white',
                                       relief='raised', bd=2,
                                       activebackground='#d32f2f',
                                       command=lambda: self._select_summary_tab(-1))
-        total_expense_btn.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.Y)
+        total_expense_btn.pack(side=tk.LEFT, padx=(0, 5))
 
         # 総収入ボタン
-        total_income_btn = tk.Button(summary_frame, text="総収入",
-                                     font=('Arial', 12, 'bold'),
+        total_income_btn = tk.Button(summary_button_frame, text="総収入",
+                                     font=('Arial', 11, 'bold'),
                                      bg='#4caf50', fg='white',
                                      relief='raised', bd=2,
                                      activebackground='#45a049',
                                      command=lambda: self._select_summary_tab(-2))
-        total_income_btn.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.Y)
+        total_income_btn.pack(side=tk.LEFT)
 
         # ボタンの参照を保存（ハイライト用）
         self.total_expense_btn = total_expense_btn
         self.total_income_btn = total_income_btn
 
-        # タブフレーム
-        tab_frame = tk.Frame(self, bg='#f0f0f0')
-        tab_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))  # 行番号を2に変更
+        # 区切り線（オプション）
+        separator = tk.Frame(tab_frame, bg='#cccccc', width=2)
+        separator.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
 
-        # タブボタンを作成
+        # 項目タブボタンを作成
         all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
         self.tab_buttons = []
 
         # スクロール可能なタブフレーム
-        tab_canvas = tk.Canvas(tab_frame, height=40, bg='#f0f0f0', highlightthickness=0)
-        tab_canvas.pack(fill=tk.X)
+        tab_canvas = tk.Canvas(tab_frame, height=35, bg='#f0f0f0', highlightthickness=0)
+        tab_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         tab_inner_frame = tk.Frame(tab_canvas, bg='#f0f0f0')
         tab_canvas.create_window((0, 0), window=tab_inner_frame, anchor="nw")
@@ -693,7 +1055,7 @@ class ChartDialog(tk.Toplevel):
                             bg='#e0e0e0', fg='black',
                             relief='raised', bd=2,
                             command=lambda idx=i: self._select_tab(idx))
-            btn.pack(side=tk.LEFT, padx=2, pady=5, fill=tk.Y)
+            btn.pack(side=tk.LEFT, padx=2, pady=2, fill=tk.Y)
             self.tab_buttons.append(btn)
 
         # 初期選択を総支出に変更（ボタンの色を更新）
@@ -703,9 +1065,9 @@ class ChartDialog(tk.Toplevel):
         tab_inner_frame.update_idletasks()
         tab_canvas.configure(scrollregion=tab_canvas.bbox("all"))
 
-        # グラフ表示エリア（行番号を3に変更）
+        # グラフ表示エリア（行番号を2に変更）
         chart_frame = tk.Frame(self, bg='#f0f0f0')
-        chart_frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=5)
+        chart_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=5)
         chart_frame.grid_rowconfigure(0, weight=1)
         chart_frame.grid_columnconfigure(0, weight=1)
 
@@ -834,7 +1196,25 @@ class ChartDialog(tk.Toplevel):
         amounts = [item[1] for item in sorted_data]
 
         # 折れ線グラフを描画
-        ax.plot(dates, amounts, marker='o', linewidth=2, markersize=6, color=color)
+        line = ax.plot(dates, amounts, marker='o', linewidth=2, markersize=8, color=color)[0]
+
+        # 各データポイントに数値ラベルを追加
+        for i, (date, amount) in enumerate(zip(dates, amounts)):
+            # 数値を見やすくフォーマット（3桁ごとにカンマ）
+            label_text = f'¥{amount:,}'
+
+            # ラベルの位置を調整（点の少し上に配置）
+            ax.annotate(label_text,
+                        xy=(date, amount),
+                        xytext=(0, 10),  # 10ピクセル上にオフセット
+                        textcoords='offset points',
+                        ha='center',  # 水平方向は中央揃え
+                        va='bottom',  # 垂直方向は下揃え
+                        fontsize=9,
+                        bbox=dict(boxstyle='round,pad=0.3',  # 角丸の背景ボックス
+                                  facecolor='white',
+                                  edgecolor=color,
+                                  alpha=0.8))
 
         # グラフの装飾
         ax.set_title(title, fontsize=14, fontweight='bold')
@@ -854,6 +1234,11 @@ class ChartDialog(tk.Toplevel):
         # 日付ラベルを斜めに
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
 
+        # Y軸の範囲を少し広げて、上部のラベルが切れないようにする
+        y_min, y_max = ax.get_ylim()
+        y_range = y_max - y_min
+        ax.set_ylim(y_min - y_range * 0.05, y_max + y_range * 0.15)
+
         # レイアウトを調整
         self.figure.tight_layout()
 
@@ -861,17 +1246,18 @@ class ChartDialog(tk.Toplevel):
         self.canvas.draw()
 
     def _collect_total_expense_data(self):
-        """月間総支出データを収集。"""
+        """月間総支出データを収集（child_dataから直接計算）。"""
         monthly_totals = {}
 
-        # parent_table_dataから各月のデータを収集
-        for date_key, row_data in self.parent_app.parent_table_data.items():
+        # child_dataから各月のデータを収集
+        for dict_key, data_list in self.parent_app.child_data.items():
             try:
-                parts = date_key.split("-")
-                if len(parts) >= 3:
+                parts = dict_key.split("-")
+                if len(parts) == 4:
                     year = int(parts[0])
                     month = int(parts[1])
                     day = int(parts[2])
+                    col_index = int(parts[3])
 
                     # まとめ行（day=0）はスキップ
                     if day == 0:
@@ -881,82 +1267,91 @@ class ChartDialog(tk.Toplevel):
                     if month_key not in monthly_totals:
                         monthly_totals[month_key] = 0
 
-                    # 支出項目（日付列以外）を合計
-                    all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
-                    for col_idx in range(1, len(all_columns)):  # 日付列をスキップ
-                        if len(row_data) > col_idx:
-                            amount_str = str(row_data[col_idx]).strip()
-                            if amount_str:
-                                try:
-                                    amount = int(amount_str.replace(',', '').replace('¥', ''))
+                    # 各取引の金額を合計
+                    for row in data_list:
+                        if len(row) > 1:
+                            try:
+                                amount_str = str(row[1]).replace(',', '').replace('¥', '').strip()
+                                if amount_str:
+                                    amount = int(amount_str)
                                     monthly_totals[month_key] += amount
-                                except ValueError:
-                                    pass
+                            except ValueError:
+                                pass
             except (ValueError, IndexError):
                 continue
 
         return monthly_totals
 
     def _collect_total_income_data(self):
-        """月間総収入データを収集。"""
+        """月間総収入データを収集（child_dataから直接計算）。"""
         monthly_totals = {}
 
-        # parent_table_dataから各月のまとめ行の収入データを収集
-        for date_key, row_data in self.parent_app.parent_table_data.items():
+        # child_dataから各月のまとめ行の収入データを収集
+        for dict_key, data_list in self.parent_app.child_data.items():
             try:
-                parts = date_key.split("-")
-                if len(parts) >= 3:
+                parts = dict_key.split("-")
+                if len(parts) == 4:
                     year = int(parts[0])
                     month = int(parts[1])
                     day = int(parts[2])
+                    col_index = int(parts[3])
 
-                    # まとめ行（day=0）のみ対象
-                    if day == 0:
+                    # まとめ行（day=0）かつ収入列（col_index=3）のみ対象
+                    if day == 0 and col_index == 3:
                         month_key = date(year, month, 1)
 
-                        # 収入は列インデックス3（0ベース）に格納
-                        if len(row_data) > 3:
-                            income_str = str(row_data[3]).strip()
-                            if income_str:
+                        # 収入データの合計
+                        total_income = 0
+                        for row in data_list:
+                            if len(row) > 1:
                                 try:
-                                    income = int(income_str.replace(',', '').replace('¥', ''))
-                                    monthly_totals[month_key] = income
+                                    income_str = str(row[1]).replace(',', '').replace('¥', '').strip()
+                                    if income_str:
+                                        total_income += int(income_str)
                                 except ValueError:
                                     pass
+
+                        if total_income > 0:
+                            monthly_totals[month_key] = total_income
             except (ValueError, IndexError):
                 continue
 
         return monthly_totals
 
     def _collect_monthly_data(self):
-        """月間データを収集（既存メソッド）。"""
+        """月間データを収集（child_dataから直接集計）。"""
         monthly_totals = {}
 
-        # parent_table_dataから各月のデータを収集
-        for date_key, row_data in self.parent_app.parent_table_data.items():
+        # child_dataから各月のデータを収集
+        for dict_key, data_list in self.parent_app.child_data.items():
             try:
-                parts = date_key.split("-")
-                if len(parts) >= 3:
+                parts = dict_key.split("-")
+                if len(parts) == 4:
                     year = int(parts[0])
                     month = int(parts[1])
                     day = int(parts[2])
+                    col_index = int(parts[3])
 
                     # まとめ行（day=0）はスキップ
                     if day == 0:
                         continue
 
-                    # 指定された列のデータを取得
-                    if len(row_data) > self.current_column_index:
-                        amount_str = str(row_data[self.current_column_index]).strip()
-                        if amount_str:
-                            try:
-                                amount = int(amount_str.replace(',', '').replace('¥', ''))
-                                month_key = date(year, month, 1)
-                                if month_key not in monthly_totals:
-                                    monthly_totals[month_key] = 0
-                                monthly_totals[month_key] += amount
-                            except ValueError:
-                                pass
+                    # 指定された列のデータのみを処理
+                    if col_index == self.current_column_index:
+                        month_key = date(year, month, 1)
+                        if month_key not in monthly_totals:
+                            monthly_totals[month_key] = 0
+
+                        # 各取引の金額を合計
+                        for row in data_list:
+                            if len(row) > 1:
+                                try:
+                                    amount_str = str(row[1]).replace(',', '').replace('¥', '').strip()
+                                    if amount_str:
+                                        amount = int(amount_str)
+                                        monthly_totals[month_key] += amount
+                                except ValueError:
+                                    pass
             except (ValueError, IndexError):
                 continue
 
@@ -981,7 +1376,24 @@ class YearApp:
     def _setup_root(self):
         """メインウィンドウの基本設定。"""
         self.root.title("💰 家計管理 2025")
-        self.root.geometry("1400x960")  # 高さを増加して全行表示
+
+        # ウィンドウサイズの設定
+        window_width = 1400
+        window_height = 1000
+
+        # 画面サイズを取得
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+
+        # 中央配置のための座標を計算
+        # 画面の幅からウィンドウ幅を引いて2で割ると、左右の余白が均等になります
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+
+        # ウィンドウの位置とサイズを設定
+        # geometry()メソッドは "幅x高さ+X座標+Y座標" の形式で指定します
+        self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
+
         self.root.minsize(1200, 800)  # 最小サイズも調整
         self.root.resizable(True, True)
 
@@ -1017,8 +1429,8 @@ class YearApp:
         self.current_month = now.month
         self.tree = None
         self.child_data = {}
-        self.parent_table_data = {}
-        self.transaction_partners = set()  # 取引先の履歴
+        # self.parent_table_data = {} を削除
+        self.transaction_partners = set()
 
         # デフォルトの列定義
         self.default_columns = [
@@ -1051,7 +1463,7 @@ class YearApp:
             print(f"設定ファイル保存エラー: {e}")
 
     def _load_data_from_file(self):
-        """JSONファイルからデータを読み込む（後方互換性あり）。"""
+        """JSONファイルからデータを読み込む（簡略化版）。"""
         if not os.path.exists(DATA_FILE):
             return
 
@@ -1061,15 +1473,10 @@ class YearApp:
 
             # 新しいフォーマットか確認
             if "version" in all_data:
-                # 新しいフォーマット
                 self.child_data = all_data.get("child_data", {})
-                self.parent_table_data = all_data.get("parent_table_data", {})
-                # 古いdata.jsonからcustom_columnsとtransaction_partnersを削除（settings.jsonに移行）
             else:
                 # 古いフォーマット（後方互換性）
                 self.child_data = all_data.get("child_data", {})
-                self.parent_table_data = all_data.get("parent_table_data", {})
-                # 古いデータから取引先を抽出
                 self._extract_transaction_partners_from_old_data()
 
         except Exception as e:
@@ -1083,11 +1490,10 @@ class YearApp:
                     self.transaction_partners.add(row[0].strip())
 
     def _save_data_to_file(self):
-        """データをJSONファイルに保存する（バージョン情報付き）。"""
+        """データをJSONファイルに保存する（簡略化版）。"""
         all_data = {
             "version": "2.0",
-            "child_data": self.child_data,
-            "parent_table_data": self.parent_table_data
+            "child_data": self.child_data
         }
         try:
             with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -1408,6 +1814,19 @@ class YearApp:
 
         self.tree.bind("<MouseWheel>", on_mousewheel)
         self.tree.bind("<Shift-MouseWheel>", lambda e: self.tree.xview_scroll(int(-1 * (e.delta / 120)), "units"))
+
+        # マウスホイールでのスクロール
+        def on_mousewheel(event):
+            if event.state & 0x4:  # Ctrlキーが押されている場合は横スクロール
+                self.tree.xview_scroll(int(-1 * (event.delta / 120)), "units")
+            else:  # 通常は縦スクロール
+                self.tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        self.tree.bind("<MouseWheel>", on_mousewheel)
+        self.tree.bind("<Shift-MouseWheel>", lambda e: self.tree.xview_scroll(int(-1 * (e.delta / 120)), "units"))
+
+        # ツールチップを初期化（この行を追加）
+        self.tooltip = TreeviewTooltip(self.tree, self)
 
         print(f"Treeview作成完了 - 高さ: 25行, 列数: {len(all_columns)}")
 
@@ -1948,55 +2367,94 @@ class YearApp:
             for key in keys_to_delete:
                 del self.child_data[key]
 
-            # parent_table_dataからも該当列を削除
-            for date_key in self.parent_table_data:
-                row_data = self.parent_table_data[date_key]
-                if len(row_data) > col_index:
-                    row_data[col_index] = ""
-
             print(f"列 '{deleted_col_name}' を削除しました")
             self._recreate_tree()
             self._show_month_sheet(self.current_month)
 
-    def update_parent_cell(self, dict_key_day, col_index, new_value):
-        """親セルの値を更新。"""
+    def _calculate_day_totals(self, year, month, day):
+        """特定の日の各列の合計を計算する。"""
         all_columns = self.default_columns + self.custom_columns
-        cols = len(all_columns)
+        totals = [""] * len(all_columns)
+        totals[0] = str(day)  # 日付列
 
-        # 空文字列の場合は親テーブルからも削除
-        if not new_value or str(new_value).strip() == "":
-            print(f"空の値のため親テーブルデータを更新: {dict_key_day}")
-            if dict_key_day in self.parent_table_data:
-                row_array = self.parent_table_data[dict_key_day]
-                while len(row_array) < cols:
-                    row_array.append("")
-                row_array[col_index] = ""
+        for col_index in range(1, len(all_columns)):
+            dict_key = f"{year}-{month}-{day}-{col_index}"
+            if dict_key in self.child_data:
+                data_list = self.child_data[dict_key]
+                total = 0
+                for row in data_list:
+                    if len(row) > 1:  # 金額は2番目の要素
+                        try:
+                            amount_str = str(row[1]).replace(',', '').replace('¥', '').strip()
+                            if amount_str:
+                                total += int(amount_str)
+                        except ValueError:
+                            pass
+                if total != 0:
+                    totals[col_index] = str(total)
 
-                # 行全体が空になった場合は削除
-                if all(not str(cell).strip() for cell in row_array[1:]):  # 日付列以外が全て空
-                    print(f"行全体が空のため parent_table_data から削除: {dict_key_day}")
-                    del self.parent_table_data[dict_key_day]
+        return totals
+
+    def _show_month_sheet(self, month):
+        """月のシートを表示（child_dataから計算）。"""
+        if not self.tree:
+            return
+
+        # 既存の行を削除
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        all_columns = self.default_columns + self.custom_columns
+        days = self._get_days_in_month(month)
+
+        # 日付行を挿入（child_dataから計算）
+        for day in range(1, days + 1):
+            row_values = self._calculate_day_totals(self.current_year, month, day)
+
+            # セルの値をフォーマット（パディング追加）
+            formatted_values = []
+            for i, val in enumerate(row_values):
+                if i == 0:  # 日付列
+                    formatted_values.append(f" {val} ")
                 else:
-                    self.parent_table_data[dict_key_day] = row_array
-        else:
-            # 通常の値更新処理
-            if dict_key_day not in self.parent_table_data:
-                parts = dict_key_day.split("-")
-                day_str = parts[2]
-                row_array = [day_str] + [""] * (cols - 1)
-                self.parent_table_data[dict_key_day] = row_array
-            else:
-                row_array = self.parent_table_data[dict_key_day]
-                # 列数が足りない場合は拡張
-                while len(row_array) < cols:
-                    row_array.append("")
+                    formatted_values.append(f" {val} " if val else "  ")
 
-            row_array[col_index] = str(new_value)
-            self.parent_table_data[dict_key_day] = row_array
+            # ＋ボタン列は空のまま
+            formatted_values.append("")
 
-        # 画面更新
+            # 奇数・偶数行でタグを分ける
+            tag = "odd_row" if day % 2 == 1 else "normal_row"
+            self.tree.insert("", "end", values=formatted_values, tags=(tag,))
+
+        # 合計行
+        total_row = [" 合計 "] + ["  "] * (len(all_columns) - 1) + [""]
+        self.tree.insert("", "end", values=total_row, tags=("TOTAL",))
+
+        # まとめ行（収入データの取得）
+        summary_key = f"{self.current_year}-{month}-0-3"  # まとめ行の収入は列3
+        income_val = 0
+        if summary_key in self.child_data:
+            data_list = self.child_data[summary_key]
+            for row in data_list:
+                if len(row) > 1:
+                    try:
+                        income_str = str(row[1]).replace(',', '').replace('¥', '').strip()
+                        if income_str:
+                            income_val += int(income_str)
+                    except ValueError:
+                        pass
+
+        inc_str = f" {income_val} " if income_val != 0 else "  "
+        summary_row = [" まとめ ", "  ", " 収入 ", inc_str, " 支出 ", "  "] + ["  "] * (len(all_columns) - 6) + [""]
+        self.tree.insert("", "end", values=summary_row, tags=("SUMMARY",))
+
+        self._recalc_total_and_summary()
+
+    def update_parent_cell(self, dict_key_day, col_index, new_value):
+        """親セルの値を更新（画面のみ更新、データはchild_dataに保存済み）。"""
         y, mo, d = dict_key_day.split("-")
         y, mo, d = int(y), int(mo), int(d)
+
         if (self.current_year == y) and (self.current_month == mo):
             items = self.tree.get_children()
             if len(items) < 2:
@@ -2008,8 +2466,8 @@ class YearApp:
             for row_id in items[:-2]:
                 row_vals = list(self.tree.item(row_id, 'values'))
                 if row_vals and str(row_vals[0]).strip() == str(d):
-                    # 列数が足りない場合は拡張
-                    while len(row_vals) < cols + 1:  # +1 for ＋ button column
+                    all_columns = self.default_columns + self.custom_columns
+                    while len(row_vals) < len(all_columns) + 1:
                         row_vals.append("")
 
                     # 空文字列または0の場合は空表示（パディング付き）
@@ -2024,10 +2482,10 @@ class YearApp:
 
             if not found and d == 0:
                 sum_vals = list(self.tree.item(summary_row_id, 'values'))
-                while len(sum_vals) < cols + 1:  # +1 for ＋ button column
+                all_columns = self.default_columns + self.custom_columns
+                while len(sum_vals) < len(all_columns) + 1:
                     sum_vals.append("")
 
-                # まとめ行でも同様の処理（パディング付き）
                 display_value = "  "
                 if new_value and str(new_value).strip() != "" and str(new_value) != "0":
                     display_value = f" {new_value} "
