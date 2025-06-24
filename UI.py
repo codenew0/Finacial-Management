@@ -480,6 +480,9 @@ class MonthlyDataDialog(BaseDialog):
         columns = ["年月日", "項目", "取引先", "金額", "詳細"]
         self.result_tree = ttk.Treeview(result_frame, columns=columns, show="headings", height=15)
 
+        # 重複データ用のタグを設定（薄い赤色の背景）
+        self.result_tree.tag_configure("duplicate", background="#ffcccc")
+
         # 各列のヘッダー設定（クリックでソート可能）
         for col in columns:
             self.result_tree.heading(col, text=col, command=lambda c=col: self._sort_by_column(c))
@@ -524,9 +527,126 @@ class MonthlyDataDialog(BaseDialog):
         self.bind('<Escape>', lambda e: self.destroy())  # Escapeキーで閉じる
         self.result_tree.bind("<MouseWheel>", self._on_mousewheel)  # マウスホイールでスクロール
 
+        # ダブルクリックイベントを追加
+        self.result_tree.bind("<Double-1>", self._on_double_click)
+
+    def _on_double_click(self, event):
+        """
+        行をダブルクリックした時の処理。
+
+        選択された行のデータから日付と項目を特定し、
+        メインウィンドウを該当するセルに移動してハイライトする。
+        """
+        # クリックされた行を取得
+        item = self.result_tree.selection()
+        if not item:
+            return
+
+        # 行のインデックスを取得
+        row_index = self.result_tree.index(item[0])
+        if row_index >= len(self.monthly_data):
+            return
+
+        # 該当するデータを取得
+        data = self.monthly_data[row_index]
+
+        # 日付と列インデックスを抽出
+        year, month, day, col_index = data['sort_key']
+
+        # 親アプリケーションの年月を変更（必要な場合）
+        if self.parent_app.current_year != year or self.parent_app.current_month != month:
+            self.parent_app.current_year = year
+            self.parent_app.current_month = month
+            self.parent_app.year_label.config(text=str(year))
+            self.parent_app._select_month(month)
+
+        # 該当する行とセルに移動
+        self._navigate_to_cell(day, col_index)
+
     def _on_mousewheel(self, event):
         """マウスホイールによるスクロール処理。"""
         self.result_tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _navigate_to_cell(self, day, col_index):
+        """
+        メインウィンドウの指定されたセルに移動してハイライトする。
+
+        Args:
+            day: 日（1-31、0はまとめ行）
+            col_index: 列インデックス
+        """
+        if not self.parent_app.tree:
+            return
+
+        # Treeviewのアイテムを取得
+        items = self.parent_app.tree.get_children()
+        if not items:
+            return
+
+        # 該当する行を検索
+        target_item = None
+
+        if day == 0:  # まとめ行の場合
+            target_item = items[-1]  # 最後の行
+        else:  # 通常の日付行
+            for item in items[:-2]:  # 合計行とまとめ行を除く
+                values = self.parent_app.tree.item(item, 'values')
+                if values and str(values[0]).strip() == str(day):
+                    target_item = item
+                    break
+
+        if target_item:
+            # 該当する行を選択
+            self.parent_app.tree.selection_set(target_item)
+
+            # 行を表示範囲内にスクロール
+            self.parent_app.tree.see(target_item)
+
+            # フォーカスを設定
+            self.parent_app.tree.focus(target_item)
+
+            # 一時的にハイライト（点滅効果）
+            self._flash_highlight(target_item, col_index)
+
+    def _flash_highlight(self, item_id, col_index):
+        """
+        指定されたセルを一時的にハイライトする（点滅効果）。
+
+        Args:
+            item_id: TreeviewアイテムID
+            col_index: 列インデックス
+        """
+        # 現在のタグを保存
+        original_tags = self.parent_app.tree.item(item_id, 'tags')
+
+        # ハイライト用のタグを定義（まだ存在しない場合）
+        if not hasattr(self.parent_app, '_highlight_tag_configured'):
+            self.parent_app.tree.tag_configure("highlight", background="#ffff99")  # 明るい黄色
+            self.parent_app._highlight_tag_configured = True
+
+        # 点滅効果を実行
+        def flash(count=0):
+            if count >= 6:  # 3回点滅（on/off × 3）
+                # 元のタグに戻す
+                self.parent_app.tree.item(item_id, tags=original_tags)
+                return
+
+            if count % 2 == 0:
+                # ハイライトを適用
+                self.parent_app.tree.item(item_id, tags="highlight")
+            else:
+                # 元のタグに戻す
+                self.parent_app.tree.item(item_id, tags=original_tags)
+
+            # 次の点滅を予約
+            self.parent_app.root.after(300, lambda: flash(count + 1))
+
+        # 点滅を開始
+        flash()
+
+        # メインウィンドウを前面に表示
+        self.parent_app.root.lift()
+        self.parent_app.root.focus_force()
 
     def _sort_by_column(self, column):
         """
@@ -580,6 +700,9 @@ class MonthlyDataDialog(BaseDialog):
                       result['amount'], result['detail']]
             self.result_tree.insert("", "end", values=values)
 
+        # 重複データをチェックしてハイライト（この部分を追加）
+        self._highlight_duplicates()
+
         # データ件数を更新
         self.result_label.config(text=f"データ: {len(self.monthly_data)} 件")
 
@@ -599,6 +722,56 @@ class MonthlyDataDialog(BaseDialog):
             else:
                 # その他の列は通常表示
                 self.result_tree.heading(col, text=col)
+
+    def _highlight_duplicates(self):
+        """
+        重複データを検出して薄い赤色でハイライトする。
+
+        すべてのフィールド（年月日、項目、取引先、金額、詳細）が
+        完全に一致する行を重複と判定し、該当する行に
+        "duplicate"タグを適用する。
+        """
+        # Treeviewのすべてのアイテムを取得
+        items = self.result_tree.get_children()
+
+        # 各行のデータを収集（重複チェック用）
+        row_data_map = {}  # {item_id: (date, column, partner, amount, detail)}
+
+        for item in items:
+            values = self.result_tree.item(item, 'values')
+            if values:
+                # データをタプルとして保存（ハッシュ可能にするため）
+                data_tuple = tuple(str(v) for v in values[:5])  # 5つのフィールドすべて
+                row_data_map[item] = data_tuple
+
+        # 重複を検出
+        seen_data = {}  # {data_tuple: [item_id1, item_id2, ...]}
+
+        for item_id, data_tuple in row_data_map.items():
+            if data_tuple in seen_data:
+                seen_data[data_tuple].append(item_id)
+            else:
+                seen_data[data_tuple] = [item_id]
+
+        # 重複している行にタグを適用
+        for data_tuple, item_ids in seen_data.items():
+            if len(item_ids) > 1:  # 2つ以上ある場合は重複
+                for item_id in item_ids:
+                    # 既存のタグを保持しつつ、duplicateタグを追加
+                    current_tags = list(self.result_tree.item(item_id, 'tags'))
+
+                    # タグをリストに変換（タプルや文字列の場合があるため）
+                    if isinstance(current_tags, str):
+                        tag_list = [current_tags] if current_tags else []
+                    else:
+                        tag_list = list(current_tags)
+
+                    # duplicateタグを追加
+                    if "duplicate" not in tag_list:
+                        tag_list.append("duplicate")
+
+                    # タグをタプルとして設定（Treeviewが期待する形式）
+                    self.result_tree.item(item_id, tags=tuple(tag_list))
 
     def _load_monthly_data(self):
         """
@@ -677,6 +850,9 @@ class MonthlyDataDialog(BaseDialog):
                       result['amount'], result['detail']]
             self.result_tree.insert("", "end", values=values)
 
+        # 重複データをチェックしてハイライト
+        self._highlight_duplicates()
+
         # 列ヘッダーを更新（ソート状態を表示）
         self._update_column_headers()
 
@@ -710,6 +886,7 @@ class MonthlyDataDialog(BaseDialog):
             return int(clean_amount) if clean_amount else 0
         except ValueError:
             return 0
+
 
 class SearchDialog(BaseDialog):
     """
@@ -820,9 +997,132 @@ class SearchDialog(BaseDialog):
         self.bind('<Control-f>', lambda e: self.search_entry.focus_set())  # Ctrl+Fで検索フィールドにフォーカス
         self.result_tree.bind("<MouseWheel>", self._on_mousewheel)
 
+        # ダブルクリックイベントを追加
+        self.result_tree.bind("<Double-1>", self._on_double_click)
+
     def _on_mousewheel(self, event):
         """マウスホイールによるスクロール処理。"""
         self.result_tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _on_double_click(self, event):
+        """
+        検索結果の行をダブルクリックした時の処理。
+
+        選択された行のデータから日付と項目を特定し、
+        メインウィンドウを該当するセルに移動してハイライトする。
+        """
+        # クリックされた行を取得
+        item = self.result_tree.selection()
+        if not item:
+            return
+
+        # 行のインデックスを取得
+        try:
+            # Treeviewの全アイテムから選択されたアイテムのインデックスを探す
+            all_items = self.result_tree.get_children()
+            row_index = all_items.index(item[0])
+        except (ValueError, IndexError):
+            return
+
+        if row_index >= len(self.search_results):
+            return
+
+        # 該当するデータを取得
+        data = self.search_results[row_index]
+
+        # 日付と列インデックスを抽出
+        year, month, day, col_index = data['sort_key']
+
+        # 親アプリケーションの年月を変更（必要な場合）
+        if self.parent_app.current_year != year or self.parent_app.current_month != month:
+            self.parent_app.current_year = year
+            self.parent_app.current_month = month
+            self.parent_app.year_label.config(text=str(year))
+            self.parent_app._select_month(month)
+
+        # 該当する行とセルに移動
+        self._navigate_to_cell(day, col_index)
+
+    def _navigate_to_cell(self, day, col_index):
+        """
+        メインウィンドウの指定されたセルに移動してハイライトする。
+
+        Args:
+            day: 日（1-31、0はまとめ行）
+            col_index: 列インデックス
+        """
+        if not self.parent_app.tree:
+            return
+
+        # Treeviewのアイテムを取得
+        items = self.parent_app.tree.get_children()
+        if not items:
+            return
+
+        # 該当する行を検索
+        target_item = None
+
+        if day == 0:  # まとめ行の場合
+            target_item = items[-1]  # 最後の行
+        else:  # 通常の日付行
+            for item in items[:-2]:  # 合計行とまとめ行を除く
+                values = self.parent_app.tree.item(item, 'values')
+                if values and str(values[0]).strip() == str(day):
+                    target_item = item
+                    break
+
+        if target_item:
+            # 該当する行を選択
+            self.parent_app.tree.selection_set(target_item)
+
+            # 行を表示範囲内にスクロール
+            self.parent_app.tree.see(target_item)
+
+            # フォーカスを設定
+            self.parent_app.tree.focus(target_item)
+
+            # 一時的にハイライト（点滅効果）
+            self._flash_highlight(target_item, col_index)
+
+    def _flash_highlight(self, item_id, col_index):
+        """
+        指定されたセルを一時的にハイライトする（点滅効果）。
+
+        Args:
+            item_id: TreeviewアイテムID
+            col_index: 列インデックス
+        """
+        # 現在のタグを保存
+        original_tags = self.parent_app.tree.item(item_id, 'tags')
+
+        # ハイライト用のタグを定義（まだ存在しない場合）
+        if not hasattr(self.parent_app, '_highlight_tag_configured'):
+            self.parent_app.tree.tag_configure("highlight", background="#ffff99")  # 明るい黄色
+            self.parent_app._highlight_tag_configured = True
+
+        # 点滅効果を実行
+        def flash(count=0):
+            if count >= 6:  # 3回点滅（on/off × 3）
+                # 元のタグに戻す
+                self.parent_app.tree.item(item_id, tags=original_tags)
+                return
+
+            if count % 2 == 0:
+                # ハイライトを適用
+                self.parent_app.tree.item(item_id, tags="highlight")
+            else:
+                # 元のタグに戻す
+                self.parent_app.tree.item(item_id, tags=original_tags)
+
+            # 次の点滅を予約
+            self.parent_app.root.after(300, lambda: flash(count + 1))
+
+        # 点滅を開始
+        flash()
+
+        # メインウィンドウを前面に表示
+        self.parent_app.root.lift()
+        self.parent_app.root.focus_force()
 
     def _search(self):
         """
@@ -1685,6 +1985,7 @@ class TransactionDialog(BaseDialog):
             return int(clean_amount) if clean_amount else 0
         except ValueError:
             return 0
+
 
 class HouseholdApp:
     """
@@ -2734,6 +3035,7 @@ class HouseholdApp:
             return int(clean_amount) if clean_amount else 0
         except ValueError:
             return 0
+
 
 # ============================================================================
 # メイン実行部
