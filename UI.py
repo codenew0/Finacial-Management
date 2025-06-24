@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 import json
 import os
 import matplotlib.pyplot as plt
@@ -9,61 +9,76 @@ from datetime import datetime, date
 import matplotlib.font_manager as fm
 import warnings
 
+# アプリケーション設定
+DATA_FILE = "data.json"  # 家計データを保存するJSONファイル
+SETTINGS_FILE = "settings.json"  # アプリケーション設定を保存するファイル
 
-DATA_FILE = "data.json"
-SETTINGS_FILE = "settings.json"
-
-# フォント警告を無効化
+# matplotlibのフォント警告を抑制（日本語フォント設定時の警告を防ぐ）
 warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib.font_manager')
 
 
-# 利用可能な日本語フォントを自動検出して設定
 def setup_japanese_font():
-    """日本語フォントを自動検出して設定（修正版）"""
-    try:
-        available_fonts = [f.name for f in fm.fontManager.ttflist]
-        japanese_fonts = [
-            'Yu Gothic', 'Meiryo', 'MS Gothic', 'MS PGothic', 'MS UI Gothic'
-        ]
+    """
+    matplotlib用の日本語フォントを設定する。
 
-        found_font = None
+    Windowsシステムに存在する日本語フォントを優先順位順に検索し、
+    最初に見つかったフォントをmatplotlibのデフォルトフォントとして設定する。
+    日本語フォントが見つからない場合は、DejaVu Sansを使用する。
+    """
+    try:
+        # システムにインストールされている全フォントのリストを取得
+        available_fonts = [f.name for f in fm.fontManager.ttflist]
+
+        # Windows環境で一般的な日本語フォントのリスト（優先順位順）
+        japanese_fonts = ['Yu Gothic', 'Meiryo', 'MS Gothic', 'MS PGothic', 'MS UI Gothic']
+
+        # 利用可能な日本語フォントを検索
         for font in japanese_fonts:
             if font in available_fonts:
-                found_font = font
-                break
+                plt.rcParams['font.family'] = font
+                return
 
-        if found_font:
-            plt.rcParams['font.family'] = found_font
-            print(f"日本語フォント設定完了: {found_font}")
-        else:
-            plt.rcParams['font.family'] = 'DejaVu Sans'
-            print("日本語フォントが見つからないため、DejaVu Sansを使用")
-
-    except Exception as e:
-        print(f"フォント設定エラー: {e}")
+        # 日本語フォントが見つからない場合のフォールバック
+        plt.rcParams['font.family'] = 'DejaVu Sans'
+    except Exception:
+        # エラーが発生した場合もフォールバック
         plt.rcParams['font.family'] = 'DejaVu Sans'
 
 
 class TreeviewTooltip:
-    """Treeview用のツールチップクラス。
-
-    このクラスは、Treeviewの特定のセルにマウスを重ねたときに
-    詳細情報を表示するツールチップ機能を提供します。
     """
+    Treeviewのセルにマウスオーバーした時に詳細情報を表示するツールチップ機能。
+
+    各セルの金額の内訳（取引先、金額、詳細）を表示し、
+    合計行では日別の内訳、まとめ行では収入・支出の詳細を表示する。
+    """
+
     def __init__(self, treeview, parent_app):
+        """
+        ツールチップの初期化。
+
+        Args:
+            treeview: ツールチップを適用するTreeviewウィジェット
+            parent_app: メインアプリケーションのインスタンス（データアクセス用）
+        """
         self.treeview = treeview
         self.parent_app = parent_app
-        self.tooltip_window = None
-        self.current_item = None
-        self.current_column = None
+        self.tooltip_window = None  # ツールチップウィンドウの参照
+        self.current_item = None  # 現在ホバーしている行
+        self.current_column = None  # 現在ホバーしている列
 
         # マウスイベントをバインド
-        self.treeview.bind('<Motion>', self._on_mouse_motion)
-        self.treeview.bind('<Leave>', self._on_mouse_leave)
+        self.treeview.bind('<Motion>', self._on_mouse_motion)  # マウス移動時
+        self.treeview.bind('<Leave>', self._on_mouse_leave)  # マウスがTreeviewから離れた時
 
     def _on_mouse_motion(self, event):
-        """マウスが動いたときの処理。"""
-        # 現在のマウス位置から行と列を特定
+        """
+        マウスがTreeview上で移動した時の処理。
+
+        マウスの位置から現在どのセルの上にいるかを判定し、
+        適切なツールチップを表示する。
+        """
+        # マウス位置から行と列を特定
         item = self.treeview.identify_row(event.y)
         column = self.treeview.identify_column(event.x)
 
@@ -72,7 +87,7 @@ class TreeviewTooltip:
             self._hide_tooltip()
             return
 
-        # 前回と同じセルの場合は何もしない
+        # 同じセルにいる場合は何もしない（ちらつき防止）
         if item == self.current_item and column == self.current_column:
             return
 
@@ -82,9 +97,9 @@ class TreeviewTooltip:
 
         # 列インデックスを取得（#1, #2 などから数値を抽出）
         col_index = int(column[1:]) - 1
+        all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
 
         # 日付列や＋ボタン列の場合はツールチップを表示しない
-        all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
         if col_index == 0 or col_index >= len(all_columns):
             self._hide_tooltip()
             return
@@ -101,40 +116,41 @@ class TreeviewTooltip:
             self._hide_tooltip()
             return
 
-        # 合計行とまとめ行の判定
+        # 特殊行（合計行、まとめ行）の判定
         items = self.treeview.get_children()
         if len(items) < 2:
             self._hide_tooltip()
             return
 
-        total_row_id = items[-2]
-        summary_row_id = items[-1]
+        total_row_id = items[-2]  # 最後から2番目が合計行
+        summary_row_id = items[-1]  # 最後がまとめ行
 
-        # 合計行の場合は特別な処理
+        # 行の種類に応じて適切なツールチップを表示
         if item == total_row_id:
             self._show_total_tooltip(event, col_index)
-            return
-
-        # まとめ行の場合
-        if item == summary_row_id:
+        elif item == summary_row_id:
             if col_index == 3:  # 収入列
                 self._show_income_tooltip(event)
             elif col_index == 5:  # 支出列
                 self._show_expense_tooltip(event)
             else:
                 self._hide_tooltip()
-            return
-
-        # 通常の日付行の場合
-        try:
-            day = int(str(row_values[0]).strip())
-            self._show_detail_tooltip(event, day, col_index)
-        except ValueError:
-            self._hide_tooltip()
+        else:
+            # 通常の日付行
+            try:
+                day = int(str(row_values[0]).strip())
+                self._show_detail_tooltip(event, day, col_index)
+            except ValueError:
+                self._hide_tooltip()
 
     def _show_detail_tooltip(self, event, day, col_index):
-        """通常セルの詳細をツールチップで表示。"""
-        # child_dataからデータを取得
+        """
+        通常セルの詳細情報をツールチップで表示。
+
+        指定された日付と項目の全取引内容（取引先、金額、詳細）を
+        リスト形式で表示し、複数取引がある場合は合計も表示する。
+        """
+        # child_dataから該当するデータを取得
         dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-{day}-{col_index}"
         data_list = self.parent_app.child_data.get(dict_key, [])
 
@@ -142,7 +158,7 @@ class TreeviewTooltip:
             self._hide_tooltip()
             return
 
-        # ツールチップの内容を作成
+        # ツールチップの内容を構築
         lines = []
         total = 0
 
@@ -152,7 +168,7 @@ class TreeviewTooltip:
                 amount_str = str(row[1]).strip() if row[1] else "0"
                 detail = str(row[2]).strip() if row[2] else ""
 
-                # 金額を数値に変換
+                # 金額をパースして合計を計算
                 try:
                     amount = int(amount_str.replace(',', '').replace('¥', ''))
                     total += amount
@@ -166,7 +182,7 @@ class TreeviewTooltip:
                     line += f" ({detail})"
                 lines.append(line)
 
-        # 合計行を追加
+        # 複数取引がある場合は合計を表示
         if len(data_list) > 1:
             lines.append("─" * 30)
             lines.append(f"合計: ¥{total:,}")
@@ -175,29 +191,27 @@ class TreeviewTooltip:
         self._show_tooltip(event, "\n".join(lines))
 
     def _show_total_tooltip(self, event, col_index):
-        """合計行のツールチップを表示。"""
-        # その列の全日付のデータを集計
+        """
+        合計行のツールチップを表示。
+
+        指定された項目の月間の日別内訳を表示する。
+        データが多い場合は最初の10日分のみ表示し、
+        残りは省略表記する。
+        """
+        # 列名を取得
         all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
         column_name = all_columns[col_index] if col_index < len(all_columns) else "不明"
 
         days_with_data = []
         total = 0
+        days_in_month = self.parent_app.get_days_in_month(self.parent_app.current_month)
 
-        # 月の日数を取得
-        days_in_month = self.parent_app._get_days_in_month(self.parent_app.current_month)
-
+        # 月の全日について集計
         for day in range(1, days_in_month + 1):
             dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-{day}-{col_index}"
             if dict_key in self.parent_app.child_data:
                 data_list = self.parent_app.child_data[dict_key]
-                day_total = 0
-                for row in data_list:
-                    if len(row) > 1:
-                        try:
-                            amount = int(str(row[1]).replace(',', '').replace('¥', ''))
-                            day_total += amount
-                        except ValueError:
-                            pass
+                day_total = sum(self._parse_amount(row[1]) for row in data_list if len(row) > 1)
 
                 if day_total > 0:
                     days_with_data.append(f"{day}日: ¥{day_total:,}")
@@ -210,13 +224,17 @@ class TreeviewTooltip:
                 lines.append(f"... 他{len(days_with_data) - 10}日分")
             lines.append("─" * 30)
             lines.append(f"合計: ¥{total:,}")
-
             self._show_tooltip(event, "\n".join(lines))
         else:
             self._hide_tooltip()
 
     def _show_income_tooltip(self, event):
-        """収入のツールチップを表示。"""
+        """
+        収入セルのツールチップを表示。
+
+        まとめ行の収入欄にマウスオーバーした時に、
+        その月の全収入の内訳（収入源、金額、詳細）を表示する。
+        """
         dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-0-3"
         data_list = self.parent_app.child_data.get(dict_key, [])
 
@@ -230,17 +248,11 @@ class TreeviewTooltip:
         for row in data_list:
             if len(row) >= 3:
                 source = str(row[0]).strip() if row[0] else "（未入力）"
-                amount_str = str(row[1]).strip() if row[1] else "0"
+                amount = self._parse_amount(row[1])
                 detail = str(row[2]).strip() if row[2] else ""
 
-                try:
-                    amount = int(amount_str.replace(',', '').replace('¥', ''))
-                    total += amount
-                    amount_display = f"¥{amount:,}"
-                except ValueError:
-                    amount_display = amount_str
-
-                line = f"• {source}: {amount_display}"
+                total += amount
+                line = f"• {source}: ¥{amount:,}"
                 if detail:
                     line += f" ({detail})"
                 lines.append(line)
@@ -252,59 +264,88 @@ class TreeviewTooltip:
         self._show_tooltip(event, "\n".join(lines))
 
     def _show_expense_tooltip(self, event):
-        """支出合計のツールチップを表示。"""
-        # 全項目の支出を集計
+        """
+        支出合計のツールチップを表示。
+
+        まとめ行の支出欄にマウスオーバーした時に、
+        その月の全項目の支出内訳を項目別に集計して表示する。
+        """
         lines = ["【支出の内訳】"]
         all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
         grand_total = 0
 
+        # 各項目（列）ごとに集計
         for col_index in range(1, len(all_columns)):  # 日付列を除く
             column_total = 0
             column_name = all_columns[col_index]
+            days_in_month = self.parent_app.get_days_in_month(self.parent_app.current_month)
 
-            # その列の全日付を集計
-            days_in_month = self.parent_app._get_days_in_month(self.parent_app.current_month)
+            # その項目の月間合計を計算
             for day in range(1, days_in_month + 1):
                 dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-{day}-{col_index}"
                 if dict_key in self.parent_app.child_data:
                     for row in self.parent_app.child_data[dict_key]:
                         if len(row) > 1:
-                            try:
-                                amount = int(str(row[1]).replace(',', '').replace('¥', ''))
-                                column_total += amount
-                            except ValueError:
-                                pass
+                            column_total += self._parse_amount(row[1])
 
+            # 0円でない項目のみ表示
             if column_total > 0:
                 lines.append(f"• {column_name}: ¥{column_total:,}")
                 grand_total += column_total
 
         lines.append("─" * 30)
         lines.append(f"合計: ¥{grand_total:,}")
-
         self._show_tooltip(event, "\n".join(lines))
 
+    def _parse_amount(self, amount_str):
+        """
+        金額文字列を整数に変換する。
+
+        Args:
+            amount_str: 金額を表す文字列（カンマや円記号を含む可能性あり）
+
+        Returns:
+            int: パースされた金額（失敗時は0）
+        """
+        if not amount_str:
+            return 0
+        try:
+            # カンマと円記号を除去してから数値に変換
+            clean_amount = str(amount_str).replace(',', '').replace('¥', '').strip()
+            return int(clean_amount) if clean_amount else 0
+        except ValueError:
+            return 0
+
     def _show_tooltip(self, event, text):
-        """ツールチップを表示。"""
+        """
+        ツールチップウィンドウを表示する。
+
+        Args:
+            event: マウスイベント（位置情報を含む）
+            text: 表示するテキスト
+        """
+        # 既存のツールチップがあれば削除
         self._hide_tooltip()
 
-        # ツールチップウィンドウを作成
+        # 新しいツールチップウィンドウを作成
         self.tooltip_window = tk.Toplevel(self.treeview)
-        self.tooltip_window.wm_overrideredirect(True)
+        self.tooltip_window.wm_overrideredirect(True)  # ウィンドウ装飾を非表示
+
+        # マウスカーソルの少し右下に配置
         self.tooltip_window.wm_geometry(f"+{event.x_root + 10}+{event.y_root + 10}")
 
         # ツールチップの内容を設定
         label = tk.Label(self.tooltip_window,
                          text=text,
                          justify=tk.LEFT,
-                         background="#ffffcc",
+                         background="#ffffcc",  # 薄い黄色の背景
                          relief=tk.SOLID,
                          borderwidth=1,
                          font=("Arial", 9))
         label.pack()
 
     def _hide_tooltip(self):
-        """ツールチップを非表示。"""
+        """ツールチップを非表示にする。"""
         if self.tooltip_window:
             self.tooltip_window.destroy()
             self.tooltip_window = None
@@ -312,254 +353,265 @@ class TreeviewTooltip:
         self.current_column = None
 
     def _on_mouse_leave(self, event):
-        """マウスがTreeviewから離れたときの処理。"""
+        """マウスがTreeviewから離れた時の処理。"""
         self._hide_tooltip()
 
 
-class MonthlyDataDialog(tk.Toplevel):
-    def __init__(self, parent, parent_app, year, month):
-        """月間データダイアログの初期化。
+class BaseDialog(tk.Toplevel):
+    """
+    すべてのダイアログの基底クラス。
 
-        このクラスは、指定された年月の詳細データを表示するための
-        モーダルダイアログウィンドウを作成します。家計簿アプリの
-        メイン画面から呼び出され、その月に記録されたすべての取引
-        データを一覧表示する機能を提供します。
+    共通の初期化処理（中央配置、モーダル設定など）を提供し、
+    各ダイアログクラスはこのクラスを継承することで、
+    一貫したUIと動作を実現する。
+    """
+
+    def __init__(self, parent, title, width=800, height=600):
+        """
+        ダイアログの基本設定を行う。
+
+        Args:
+            parent: 親ウィンドウ
+            title: ダイアログのタイトル
+            width: ダイアログの幅（デフォルト: 800）
+            height: ダイアログの高さ（デフォルト: 600）
         """
         super().__init__(parent)
-        self.parent_app = parent_app
-        self.year = year
-        self.month = month
-        self.monthly_data = []
+        self.title(title)
+        self.configure(bg='#f0f0f0')  # 統一された背景色
 
-        # ソート関連の変数を追加
-        self.sort_column = None  # 現在ソートされている列
-        self.sort_reverse = False  # ソートの方向（False=昇順、True=降順）
+        # ダイアログを親ウィンドウの中央に配置
+        self._center_on_parent(width, height)
 
-        # ダイアログの基本サイズを設定
-        # これらの値は、データを快適に閲覧できる適切なサイズです
-        dialog_width = 800
-        dialog_height = 600
+        # モーダルダイアログとして設定
+        self.transient(parent)  # 親ウィンドウに従属
+        self.grab_set()  # このダイアログ以外の操作を無効化
+        self.resizable(True, True)  # サイズ変更可能
 
-        # 親ウィンドウの中央に配置するための計算
-        # この処理により、ダイアログが画面の中央に表示されます
+        # ダイアログを前面に表示
+        self.lift()
+        self.focus_force()
+
+    def _center_on_parent(self, width, height):
+        """
+        ダイアログを親ウィンドウの中央に配置する。
+
+        画面外にはみ出さないように位置を調整し、
+        ユーザーが見やすい位置に表示する。
+        """
+        # 親ウィンドウの位置とサイズを取得
         parent_x = self.master.winfo_x()
         parent_y = self.master.winfo_y()
         parent_w = self.master.winfo_width()
         parent_h = self.master.winfo_height()
 
-        x = parent_x + (parent_w - dialog_width) // 2
-        y = parent_y + (parent_h - dialog_height) // 2
+        # 中央配置の計算
+        x = parent_x + (parent_w - width) // 2
+        y = parent_y + (parent_h - height) // 2
 
-        # ダイアログウィンドウの設定を適用
-        self.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
-        self.minsize(600, 400)  # 最小サイズを設定して使いやすさを確保
-        self.title(f"月間データ詳細 - {year}年{month:02d}月")
-        self.configure(bg='#f0f0f0')  # 統一感のある背景色
+        # ダイアログの位置とサイズを設定
+        self.geometry(f"{width}x{height}+{x}+{y}")
 
-        # モーダルダイアログとして設定
-        # これにより、このダイアログが開いている間は親ウィンドウの操作が制限されます
-        self.transient(parent)
-        self.grab_set()
-        self.resizable(True, True)  # ユーザーがサイズ調整できるように設定
+        # 最小サイズを設定（元のサイズの75%）
+        self.minsize(int(width * 0.75), int(height * 0.67))
 
-        # ウィジェットを作成してデータを読み込み
+
+class MonthlyDataDialog(BaseDialog):
+    """
+    月間データの詳細を表示するダイアログ。
+
+    指定された年月のすべての取引データを一覧表示し、
+    項目ごとにソート可能な機能を提供する。
+    合計金額や平均金額などの統計情報も表示する。
+    """
+
+    def __init__(self, parent, parent_app, year, month):
+        """
+        月間データダイアログを初期化する。
+
+        Args:
+            parent: 親ウィンドウ
+            parent_app: メインアプリケーションのインスタンス
+            year: 表示する年
+            month: 表示する月
+        """
+        self.parent_app = parent_app
+        self.year = year
+        self.month = month
+        self.monthly_data = []  # 月間データを格納するリスト
+        self.sort_column = None  # 現在ソートされている列
+        self.sort_reverse = False  # ソートの方向（False=昇順、True=降順）
+
+        # 基底クラスの初期化（タイトルに年月を含める）
+        super().__init__(parent, f"月間データ詳細 - {year}年{month:02d}月")
+
+        # UI要素を作成してデータを読み込む
         self._create_widgets()
         self._load_monthly_data()
 
-        # ダイアログを前面に表示
-        # これにより確実にユーザーの注意を引くことができます
-        self.lift()
-        self.focus_force()
-
     def _create_widgets(self):
-        """ダイアログ内のウィジェットを作成。
-
-        このメソッドは、月間データを表示するための全てのUI要素を
-        構築します。グリッドレイアウトを使用して、レスポンシブな
-        デザインを実現しています。
         """
-        # グリッドの重み設定
-        # row=1に重みを設定することで、データ表示エリアが伸縮可能になります
+        ダイアログ内のUI要素を作成する。
+
+        タイトル、データ表示用のTreeview、統計情報表示エリア、
+        閉じるボタンなどを配置する。
+        """
+        # グリッドレイアウトの設定（データ表示エリアを伸縮可能にする）
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        # タイトル部分の作成
-        # ユーザーが現在閲覧している期間を明確に示します
+        # タイトルセクション
         title_frame = tk.Frame(self, bg='#f0f0f0')
         title_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
 
-        title_label = tk.Label(title_frame, text=f"{self.year}年{self.month:02d}月の詳細データ",
-                               font=('Arial', 16, 'bold'), bg='#f0f0f0')
+        title_label = tk.Label(title_frame,
+                               text=f"{self.year}年{self.month:02d}月の詳細データ",
+                               font=('Arial', 16, 'bold'),
+                               bg='#f0f0f0')
         title_label.pack()
 
-        # 結果表示部分の作成
-        # メインのデータ表示エリアで、リサイズ可能な設計です
+        # データ表示セクション
         result_frame = tk.Frame(self, bg='#f0f0f0')
         result_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         result_frame.grid_rowconfigure(0, weight=1)
         result_frame.grid_columnconfigure(0, weight=1)
 
-        # データ表示用のTreeviewウィジェット
+        # Treeview（データ表示用のテーブル）
         columns = ["年月日", "項目", "取引先", "金額", "詳細"]
         self.result_tree = ttk.Treeview(result_frame, columns=columns, show="headings", height=15)
 
-        # 各列のヘッダーと幅を設定
+        # 各列のヘッダー設定（クリックでソート可能）
         for col in columns:
             self.result_tree.heading(col, text=col, command=lambda c=col: self._sort_by_column(c))
 
-        # 列幅の設定は既存のまま
-        self.result_tree.heading("年月日", text="年月日")
-        self.result_tree.heading("項目", text="項目")
-        self.result_tree.heading("取引先", text="取引先")
-        self.result_tree.heading("金額", text="金額")
-        self.result_tree.heading("詳細", text="詳細")
-
-        # 列の幅設定 - データの特性に合わせて調整
+        # 列幅の設定（データの特性に応じて最適化）
         self.result_tree.column("年月日", anchor="center", width=100, minwidth=80)
         self.result_tree.column("項目", anchor="center", width=120, minwidth=100)
         self.result_tree.column("取引先", anchor="center", width=150, minwidth=120)
         self.result_tree.column("金額", anchor="center", width=100, minwidth=80)
         self.result_tree.column("詳細", anchor="center", width=200, minwidth=150)
 
-        # Treeviewをグリッドに配置
         self.result_tree.grid(row=0, column=0, sticky="nsew")
 
-        # 縦スクロールバーの追加
-        # 大量のデータでも快適にスクロールできるようになります
-        result_scrollbar = ttk.Scrollbar(result_frame, orient=tk.VERTICAL, command=self.result_tree.yview)
-        result_scrollbar.grid(row=0, column=1, sticky="ns")
-        self.result_tree.configure(yscrollcommand=result_scrollbar.set)
+        # スクロールバー（縦・横）
+        v_scrollbar = ttk.Scrollbar(result_frame, orient=tk.VERTICAL, command=self.result_tree.yview)
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.result_tree.configure(yscrollcommand=v_scrollbar.set)
 
-        # 横スクロールバーの追加
-        # 列が多い場合や画面が小さい場合に対応します
         h_scrollbar = ttk.Scrollbar(result_frame, orient=tk.HORIZONTAL, command=self.result_tree.xview)
         h_scrollbar.grid(row=1, column=0, sticky="ew")
         self.result_tree.configure(xscrollcommand=h_scrollbar.set)
 
         # 統計情報表示エリア
-        # 月間の合計金額や平均などの統計を表示します
         stats_frame = tk.Frame(self, bg='#f0f0f0')
         stats_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=5)
 
         self.stats_label = tk.Label(stats_frame, text="", font=('Arial', 12, 'bold'), bg='#f0f0f0')
         self.stats_label.pack()
 
-        # 結果カウント表示
-        # ユーザーが現在のデータ量を把握できるようにします
-        self.result_label = tk.Label(self, text="データ: 0 件", font=('Arial', 10), bg='#f0f0f0', fg='#666666')
+        # データ件数表示
+        self.result_label = tk.Label(self, text="データ: 0 件",
+                                     font=('Arial', 10), bg='#f0f0f0', fg='#666666')
         self.result_label.grid(row=3, column=0, sticky="w", padx=10, pady=(5, 10))
 
         # 閉じるボタン
-        # ダイアログを終了するためのボタンです
         close_btn = tk.Button(self, text="閉じる", font=('Arial', 12),
                               bg='#f44336', fg='white', relief='raised', bd=2,
                               activebackground='#d32f2f', command=self.destroy)
         close_btn.grid(row=4, column=0, pady=(0, 10), ipady=5)
 
-        # キーボードショートカットの設定
-        # Escapeキーでダイアログを閉じることができます
-        self.bind('<Escape>', lambda e: self.destroy())
+        # キーボードショートカット
+        self.bind('<Escape>', lambda e: self.destroy())  # Escapeキーで閉じる
+        self.result_tree.bind("<MouseWheel>", self._on_mousewheel)  # マウスホイールでスクロール
 
-        # マウスホイールでのスクロール機能
-        # より直感的な操作を可能にします
-        def on_mousewheel(event):
-            self.result_tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        self.result_tree.bind("<MouseWheel>", on_mousewheel)
+    def _on_mousewheel(self, event):
+        """マウスホイールによるスクロール処理。"""
+        self.result_tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _sort_by_column(self, column):
-        """指定された列でデータをソートする。
-
-        このメソッドは列ヘッダーがクリックされたときに呼び出されます。
-        同じ列を再度クリックすると、ソート順が反転します。
         """
-        # 同じ列をクリックした場合は、ソート順を反転
+        指定された列でデータをソートする。
+
+        同じ列を再度クリックすると、ソート順が反転する。
+        金額は数値として、その他は文字列としてソートする。
+
+        Args:
+            column: ソートする列名
+        """
+        # 同じ列をクリックした場合はソート順を反転
         if self.sort_column == column:
             self.sort_reverse = not self.sort_reverse
         else:
-            # 新しい列の場合は、昇順から開始
+            # 新しい列の場合は昇順から開始
             self.sort_column = column
             self.sort_reverse = False
 
-        # ソートキーを決定する関数を定義
-        # この関数は各データ項目から比較用の値を抽出します
-        def get_sort_key(item):
-            if column == "年月日":
-                # 日付は既にsort_keyとして保存してあるので、それを使用
-                return item['sort_key']
-            elif column == "項目":
-                return item['column']
-            elif column == "取引先":
-                return item['partner']
-            elif column == "金額":
-                # 金額は数値として比較するため、amount_valueを使用
-                return item['amount_value']
-            elif column == "詳細":
-                return item['detail']
-            else:
-                return ""
+        # ソートキーを決定する関数のマッピング
+        sort_key_map = {
+            "年月日": lambda x: x['sort_key'],  # タプル形式の日付でソート
+            "項目": lambda x: x['column'],
+            "取引先": lambda x: x['partner'],
+            "金額": lambda x: x['amount_value'],  # 数値でソート
+            "詳細": lambda x: x['detail']
+        }
 
         # データをソート
-        self.monthly_data.sort(key=get_sort_key, reverse=self.sort_reverse)
+        self.monthly_data.sort(key=sort_key_map.get(column, lambda x: ""),
+                               reverse=self.sort_reverse)
 
         # Treeviewを再表示
         self._refresh_treeview()
-
-        # 視覚的フィードバックのため、ソート中の列を示す
         self._update_column_headers()
 
     def _refresh_treeview(self):
-        """ソート後のデータでTreeviewを再表示する。
+        """
+        ソート後のデータでTreeviewを再表示する。
 
-        このメソッドは既存の表示をクリアし、
-        現在のmonthly_dataの順序で再度データを挿入します。
+        既存の表示をクリアし、ソート済みのデータを
+        新しい順序で挿入する。
         """
         # 既存の表示をクリア
         for item in self.result_tree.get_children():
             self.result_tree.delete(item)
 
-        # ソート済みのデータを表示
+        # ソート済みデータを表示
         for result in self.monthly_data:
-            values = [
-                result['date'],
-                result['column'],
-                result['partner'],
-                result['amount'],
-                result['detail']
-            ]
+            values = [result['date'], result['column'], result['partner'],
+                      result['amount'], result['detail']]
             self.result_tree.insert("", "end", values=values)
 
-        # 結果カウントは変わらないが、念のため更新
+        # データ件数を更新
         self.result_label.config(text=f"データ: {len(self.monthly_data)} 件")
 
     def _update_column_headers(self):
-        """ソート状態を示すため、列ヘッダーの表示を更新する。
+        """
+        ソート状態を示すため、列ヘッダーに矢印を表示する。
 
-        現在ソートされている列には、昇順なら▲、降順なら▼を付けます。
-        これにより、ユーザーは現在のソート状態を一目で確認できます。
+        昇順の場合は▲、降順の場合は▼を列名の後ろに付ける。
         """
         columns = ["年月日", "項目", "取引先", "金額", "詳細"]
 
         for col in columns:
             if col == self.sort_column:
-                # ソート中の列には矢印を付ける
-                if self.sort_reverse:
-                    # 降順の場合は下向き矢印
-                    self.result_tree.heading(col, text=f"{col} ▼")
-                else:
-                    # 昇順の場合は上向き矢印
-                    self.result_tree.heading(col, text=f"{col} ▲")
+                # ソート中の列に矢印を付ける
+                arrow = " ▼" if self.sort_reverse else " ▲"
+                self.result_tree.heading(col, text=f"{col}{arrow}")
             else:
-                # ソートされていない列は通常の表示
+                # その他の列は通常表示
                 self.result_tree.heading(col, text=col)
 
     def _load_monthly_data(self):
-        """月間データを読み込んで表示。"""
-        # 既存の表示内容をクリア
+        """
+        指定された年月のデータをchild_dataから読み込む。
+
+        データを整形して表示用のリストに格納し、
+        統計情報（合計金額、平均金額）も計算する。
+        収入データ（まとめ行）は除外する。
+        """
+        # 既存の表示をクリア
         for item in self.result_tree.get_children():
             self.result_tree.delete(item)
 
-        # データ格納用変数の初期化
         self.monthly_data = []
         total_amount = 0  # 月間合計金額
         total_count = 0  # 取引件数
@@ -567,7 +619,7 @@ class MonthlyDataDialog(tk.Toplevel):
         # child_dataから該当月のデータを検索
         for dict_key, data_list in self.parent_app.child_data.items():
             try:
-                # キーを解析して年月日と項目インデックスを取得
+                # キーを解析（形式: "年-月-日-列インデックス"）
                 parts = dict_key.split("-")
                 if len(parts) == 4:
                     year = int(parts[0])
@@ -575,43 +627,29 @@ class MonthlyDataDialog(tk.Toplevel):
                     day = int(parts[2])
                     col_index = int(parts[3])
 
-                    # まとめ行（day=0）はスキップ - この行を追加
+                    # まとめ行（day=0）は収入データなので除外
                     if day == 0:
                         continue
 
-                    # 指定された年月と一致するデータのみを処理
+                    # 指定された年月のデータのみ処理
                     if year == self.year and month == self.month:
                         # 項目名を取得
                         all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
-                        if col_index < len(all_columns):
-                            column_name = all_columns[col_index]
-                        else:
-                            column_name = f"列{col_index}"  # 範囲外の場合の安全な処理
-
-                        # 日付文字列の作成
+                        column_name = all_columns[col_index] if col_index < len(all_columns) else f"列{col_index}"
                         date_str = f"{year}/{month:02d}/{day:02d}"
 
                         # 各取引データを処理
                         for row in data_list:
-                            if len(row) >= 3:  # 最低限必要なデータが揃っている場合のみ処理
+                            if len(row) >= 3:  # 必要な要素（取引先、金額、詳細）が揃っているか確認
                                 # 各フィールドのデータを安全に取得
                                 partner = str(row[0]).strip() if row[0] else ""
                                 amount_str = str(row[1]).strip() if row[1] else ""
                                 detail = str(row[2]).strip() if row[2] else ""
 
-                                # 金額の数値変換処理
-                                amount_value = 0
-                                if amount_str:
-                                    try:
-                                        # カンマや通貨記号を除去して数値に変換
-                                        clean_amount = amount_str.replace(',', '').replace('¥', '').strip()
-                                        if clean_amount:
-                                            amount_value = int(clean_amount)
-                                    except ValueError:
-                                        # 変換できない場合は0として処理
-                                        amount_value = 0
+                                # 金額を数値に変換（統計計算用）
+                                amount_value = self._parse_amount(amount_str)
 
-                                # 結果データの構造化
+                                # 結果データを構造化
                                 result = {
                                     'date': date_str,
                                     'column': column_name,
@@ -619,242 +657,198 @@ class MonthlyDataDialog(tk.Toplevel):
                                     'amount': amount_str,
                                     'detail': detail,
                                     'amount_value': amount_value,
-                                    'sort_key': (year, month, day, col_index)  # ソート用キー
+                                    'sort_key': (year, month, day, col_index)  # ソート用のタプル
                                 }
                                 self.monthly_data.append(result)
                                 total_amount += amount_value
                                 total_count += 1
-
-            except (ValueError, IndexError) as e:
-                # データ解析でエラーが発生した場合のログ出力
-                print(f"キー解析エラー: {dict_key}, エラー: {e}")
+            except (ValueError, IndexError):
+                # データ解析エラーは無視して続行
                 continue
 
-        # 結果を日付順にソート
+        # デフォルトで日付順にソート
         self.monthly_data.sort(key=lambda x: x['sort_key'])
-
-        # デフォルトのソート状態を設定
         self.sort_column = "年月日"
         self.sort_reverse = False
 
-        # 結果をTreeviewに表示
+        # データをTreeviewに表示
         for result in self.monthly_data:
-            values = [
-                result['date'],
-                result['column'],
-                result['partner'],
-                result['amount'],
-                result['detail']
-            ]
+            values = [result['date'], result['column'], result['partner'],
+                      result['amount'], result['detail']]
             self.result_tree.insert("", "end", values=values)
 
-        # 列ヘッダーを更新して、現在のソート状態を表示
+        # 列ヘッダーを更新（ソート状態を表示）
         self._update_column_headers()
 
-        # 統計情報の計算と表示
+        # 統計情報を計算して表示
         if total_count > 0:
             avg_amount = total_amount / total_count
             self.stats_label.config(text=f"合計金額: ¥{total_amount:,} | 平均金額: ¥{avg_amount:.0f}")
         else:
             self.stats_label.config(text="")
 
-        # 結果カウントの更新
+        # データ件数を表示
         self.result_label.config(text=f"データ: {len(self.monthly_data)} 件")
 
-        # 処理完了のログ出力
-        print(f"月間データ読み込み完了: {len(self.monthly_data)} 件の結果")
-
-
-class SearchDialog(tk.Toplevel):
-    def __init__(self, parent, parent_app):
-        """検索ダイアログの初期化。
-
-        このクラスは家計簿アプリケーションの検索機能を担当する重要なコンポーネントです。
-        ユーザーが大量の家計データの中から特定の情報を素早く見つけるための
-        直感的なインターフェースを提供します。検索は全文検索方式で、
-        取引先名、金額、詳細情報のすべてを対象として実行されます。
+    def _parse_amount(self, amount_str):
         """
-        super().__init__(parent)
-        self.parent_app = parent_app  # メインアプリケーションへの参照を保持
+        金額文字列を整数に変換する。
+
+        カンマや円記号を除去し、数値に変換する。
+        変換できない場合は0を返す。
+
+        Args:
+            amount_str: 金額を表す文字列
+
+        Returns:
+            int: パースされた金額
+        """
+        if not amount_str:
+            return 0
+        try:
+            clean_amount = amount_str.replace(',', '').replace('¥', '').strip()
+            return int(clean_amount) if clean_amount else 0
+        except ValueError:
+            return 0
+
+class SearchDialog(BaseDialog):
+    """
+    取引データを検索するためのダイアログ。
+
+    全期間のデータから、取引先名、金額、詳細のいずれかに
+    検索文字列が含まれる取引を抽出して表示する。
+    大文字小文字を区別しない部分一致検索を行う。
+    """
+
+    def __init__(self, parent, parent_app):
+        """
+        検索ダイアログを初期化する。
+
+        Args:
+            parent: 親ウィンドウ
+            parent_app: メインアプリケーションのインスタンス
+        """
+        self.parent_app = parent_app
         self.search_results = []  # 検索結果を格納するリスト
 
-        # ダイアログウィンドウのサイズ設定
-        # 検索結果を十分に表示できる適切なサイズを設定しています
-        dialog_width = 800
-        dialog_height = 600
+        super().__init__(parent, "検索")
 
-        # 親ウィンドウの中央にダイアログを配置する計算
-        # この処理により、ユーザーの注意を適切に検索ダイアログに向けることができます
-        parent_x = self.master.winfo_x()
-        parent_y = self.master.winfo_y()
-        parent_w = self.master.winfo_width()
-        parent_h = self.master.winfo_height()
-
-        x = parent_x + (parent_w - dialog_width) // 2
-        y = parent_y + (parent_h - dialog_height) // 2
-
-        # ダイアログの基本設定を適用
-        self.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
-        self.minsize(600, 400)  # 最小サイズの制限により使いやすさを確保
-        self.title("検索")
-        self.configure(bg='#f0f0f0')
-
-        # モーダルダイアログとして設定
-        # これにより検索作業中は他の操作がブロックされ、集中して検索できます
-        self.transient(parent)
-        self.grab_set()
-        self.resizable(True, True)
-
-        # ユーザーインターフェースの構築
         self._create_widgets()
 
-        # ダイアログを前面に表示して即座に使用可能な状態にします
-        self.lift()
-        self.focus_force()
-
     def _create_widgets(self):
-        """検索ダイアログのユーザーインターフェースを構築。
-
-        このメソッドは検索機能に必要な全てのUI要素を作成します。
-        検索入力エリア、結果表示エリア、操作ボタンを論理的に配置し、
-        ユーザーが直感的に操作できるインターフェースを実現しています。
         """
-        # グリッドレイアウトの重み設定
-        # row=1（結果表示エリア）に重みを設定することで、
-        # ウィンドウサイズが変更されても検索結果が適切に表示されます
-        self.grid_rowconfigure(1, weight=1)
+        検索ダイアログのUI要素を作成する。
+
+        検索入力フィールド、検索ボタン、結果表示用のTreeview、
+        結果カウンター、閉じるボタンなどを配置する。
+        """
+        # グリッドレイアウトの設定
+        self.grid_rowconfigure(1, weight=1)  # 結果表示エリアを伸縮可能に
         self.grid_columnconfigure(0, weight=1)
 
-        # 検索入力エリアの構築
-        # ユーザーが検索キーワードを入力し、検索を実行するための領域です
+        # 検索入力セクション
         search_frame = tk.Frame(self, bg='#f0f0f0')
         search_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
         search_frame.grid_columnconfigure(1, weight=1)  # 入力フィールドを伸縮可能に
 
-        # 検索フィールドのラベル
-        # ユーザーに何を入力すべきかを明確に示します
+        # 検索ラベル
         tk.Label(search_frame, text="検索文字列:", font=('Arial', 12), bg='#f0f0f0').grid(
             row=0, column=0, padx=(0, 10), sticky="w")
 
-        # 検索文字列入力フィールド
-        # ユーザーが検索したいキーワードを入力する主要な要素です
+        # 検索入力フィールド
         self.search_entry = tk.Entry(search_frame, font=('Arial', 12), width=30)
         self.search_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10))
-        self.search_entry.focus_set()  # ダイアログ開設時に即座に入力可能な状態に
+        self.search_entry.focus_set()  # 初期フォーカスを設定
 
-        # 検索実行ボタン
-        # 明確な視覚的フィードバックを提供するスタイリングを施しています
+        # 検索ボタン
         search_btn = tk.Button(search_frame, text="検索", font=('Arial', 12),
                                bg='#2196f3', fg='white', relief='raised', bd=2,
                                activebackground='#1976d2', command=self._search)
         search_btn.grid(row=0, column=2, padx=(0, 10), ipady=3)
 
-        # 結果クリアボタン
-        # 前回の検索結果をリセットして新しい検索を開始できます
+        # クリアボタン
         clear_btn = tk.Button(search_frame, text="クリア", font=('Arial', 12),
                               bg='#ff9800', fg='white', relief='raised', bd=2,
                               activebackground='#f57c00', command=self._clear_results)
         clear_btn.grid(row=0, column=3, ipady=3)
 
-        # 検索結果表示エリアの構築
-        # 検索で見つかったデータを整理して表示するための領域です
+        # 結果表示セクション
         result_frame = tk.Frame(self, bg='#f0f0f0')
         result_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         result_frame.grid_rowconfigure(0, weight=1)
         result_frame.grid_columnconfigure(0, weight=1)
 
-        # 検索結果表示用のTreeview
-        # 家計データの構造に合わせて5つの列を定義しています
+        # 結果表示用Treeview
         columns = ["年月日", "項目", "取引先", "金額", "詳細"]
         self.result_tree = ttk.Treeview(result_frame, columns=columns, show="headings", height=15)
 
-        # 各列のヘッダー設定
-        # ユーザーがデータの内容を理解しやすいように明確なラベルを設定
-        self.result_tree.heading("年月日", text="年月日")
-        self.result_tree.heading("項目", text="項目")
-        self.result_tree.heading("取引先", text="取引先")
-        self.result_tree.heading("金額", text="金額")
-        self.result_tree.heading("詳細", text="詳細")
+        # 列の設定
+        for col in columns:
+            self.result_tree.heading(col, text=col)
 
-        # 列幅の最適化設定
-        # 各データタイプの特性に応じて読みやすい幅を設定しています
         self.result_tree.column("年月日", anchor="center", width=100, minwidth=80)
         self.result_tree.column("項目", anchor="center", width=120, minwidth=100)
         self.result_tree.column("取引先", anchor="center", width=150, minwidth=120)
         self.result_tree.column("金額", anchor="center", width=100, minwidth=80)
         self.result_tree.column("詳細", anchor="center", width=200, minwidth=150)
 
-        # Treeviewをレイアウトに配置
         self.result_tree.grid(row=0, column=0, sticky="nsew")
 
-        # 縦スクロールバーの追加
-        # 多数の検索結果でも快適にナビゲートできるようにします
-        result_scrollbar = ttk.Scrollbar(result_frame, orient=tk.VERTICAL, command=self.result_tree.yview)
-        result_scrollbar.grid(row=0, column=1, sticky="ns")
-        self.result_tree.configure(yscrollcommand=result_scrollbar.set)
+        # スクロールバー
+        v_scrollbar = ttk.Scrollbar(result_frame, orient=tk.VERTICAL, command=self.result_tree.yview)
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.result_tree.configure(yscrollcommand=v_scrollbar.set)
 
-        # 横スクロールバーの追加
-        # 列が多い場合や小さな画面での表示に対応します
         h_scrollbar = ttk.Scrollbar(result_frame, orient=tk.HORIZONTAL, command=self.result_tree.xview)
         h_scrollbar.grid(row=1, column=0, sticky="ew")
         self.result_tree.configure(xscrollcommand=h_scrollbar.set)
 
-        # 検索結果カウンター
-        # ユーザーが検索の成果を数値的に把握できるようにします
-        self.result_label = tk.Label(self, text="検索結果: 0 件", font=('Arial', 10), bg='#f0f0f0', fg='#666666')
+        # 結果カウンター
+        self.result_label = tk.Label(self, text="検索結果: 0 件",
+                                     font=('Arial', 10), bg='#f0f0f0', fg='#666666')
         self.result_label.grid(row=2, column=0, sticky="w", padx=10, pady=(5, 10))
 
-        # ダイアログ終了ボタン
-        # ユーザーが検索作業を完了した後にダイアログを閉じることができます
+        # 閉じるボタン
         close_btn = tk.Button(self, text="閉じる", font=('Arial', 12),
                               bg='#f44336', fg='white', relief='raised', bd=2,
                               activebackground='#d32f2f', command=self.destroy)
         close_btn.grid(row=3, column=0, pady=(0, 10), ipady=5)
 
-        # キーボードショートカットの設定
-        # より効率的な操作を可能にするキーバインドを追加しています
-        self.search_entry.bind('<Return>', lambda e: self._search())  # Enterキーで検索実行
-        self.bind('<Escape>', lambda e: self.destroy())  # Escapeキーで終了
+        # キーボードショートカット
+        self.search_entry.bind('<Return>', lambda e: self._search())  # Enterキーで検索
+        self.bind('<Escape>', lambda e: self.destroy())  # Escapeキーで閉じる
         self.bind('<Control-f>', lambda e: self.search_entry.focus_set())  # Ctrl+Fで検索フィールドにフォーカス
+        self.result_tree.bind("<MouseWheel>", self._on_mousewheel)
 
-        # マウスホイールによるスクロール機能
-        # より直感的な操作環境を提供します
-        def on_mousewheel(event):
-            self.result_tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        self.result_tree.bind("<MouseWheel>", on_mousewheel)
+    def _on_mousewheel(self, event):
+        """マウスホイールによるスクロール処理。"""
+        self.result_tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _search(self):
-        """検索処理の実行。
-
-        この関数は家計簿データ全体に対して全文検索を実行します。
-        検索アルゴリズムは大文字小文字を区別せず、部分一致による
-        柔軟なマッチングを行います。検索対象は取引先名、金額、詳細情報の
-        すべてのフィールドに及び、ユーザーが求める情報を効率的に発見できます。
         """
-        # 検索文字列の取得と検証
+        検索を実行する。
+
+        入力された検索文字列を使用して、全期間のデータから
+        該当する取引を検索し、結果を表示する。
+        検索は大文字小文字を区別せず、部分一致で行う。
+        """
+        # 検索文字列を取得
         search_text = self.search_entry.get().strip()
         if not search_text:
             messagebox.showwarning("警告", "検索文字列を入力してください。")
             return
 
-        print(f"検索開始: '{search_text}'")
-
         # 前回の検索結果をクリア
-        # 新しい検索結果のみを表示するために既存の表示をリセットします
         for item in self.result_tree.get_children():
             self.result_tree.delete(item)
 
-        # 検索結果格納用変数の初期化
         self.search_results = []
         search_text_lower = search_text.lower()  # 大文字小文字を区別しない検索のため
 
-        # 全データに対する検索処理
-        # parent_appのchild_dataから該当するデータを抽出します
+        # 全データから検索
         for dict_key, data_list in self.parent_app.child_data.items():
             try:
-                # データキーの解析
-                # キー形式: "年-月-日-列インデックス" からメタデータを抽出
+                # キーを解析
                 parts = dict_key.split("-")
                 if len(parts) == 4:
                     year = int(parts[0])
@@ -862,141 +856,106 @@ class SearchDialog(tk.Toplevel):
                     day = int(parts[2])
                     col_index = int(parts[3])
 
-                    # 項目名の特定
-                    # 列インデックスから実際の項目名を取得します
+                    # 項目名を取得
                     all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
-                    if col_index < len(all_columns):
-                        column_name = all_columns[col_index]
-                    else:
-                        column_name = f"列{col_index}"  # 範囲外の場合の安全な処理
-
-                    # 日付文字列の生成
+                    column_name = all_columns[col_index] if col_index < len(all_columns) else f"列{col_index}"
                     date_str = f"{year}/{month:02d}/{day:02d}"
 
-                    # 各取引データの検索処理
-                    # data_listに含まれる個別の取引に対して検索を実行
+                    # 各取引データを検索
                     for row in data_list:
-                        if len(row) >= 3:  # 必要なデータフィールドが存在する場合のみ処理
-                            # 各フィールドのデータを安全に取得
+                        if len(row) >= 3:
                             partner = str(row[0]).strip() if row[0] else ""
                             amount = str(row[1]).strip() if row[1] else ""
                             detail = str(row[2]).strip() if row[2] else ""
 
-                            # 検索条件のマッチング判定
-                            # 全てのフィールドに対して部分一致検索を実行
+                            # いずれかのフィールドに検索文字列が含まれているかチェック
                             if (search_text_lower in partner.lower() or
                                     search_text_lower in amount.lower() or
                                     search_text_lower in detail.lower()):
-                                # マッチしたデータの構造化
-                                # 表示用の統一されたデータ構造を作成
+                                # 検索結果を構造化
                                 result = {
                                     'date': date_str,
                                     'column': column_name,
                                     'partner': partner,
                                     'amount': amount,
                                     'detail': detail,
-                                    'sort_key': (year, month, day, col_index)  # ソート用のキー
+                                    'sort_key': (year, month, day, col_index)
                                 }
                                 self.search_results.append(result)
-
-            except (ValueError, IndexError) as e:
-                # データ解析エラーの処理
-                # 不正なデータ形式による例外をログに記録し、処理を継続
-                print(f"キー解析エラー: {dict_key}, エラー: {e}")
+            except (ValueError, IndexError):
                 continue
 
-        # 検索結果の時系列ソート
-        # ユーザーが結果を時間軸で理解しやすいように整理
+        # 結果を日付順にソート
         self.search_results.sort(key=lambda x: x['sort_key'])
 
-        # 検索結果の表示処理
-        # 整理された結果をTreeviewに表示
+        # 結果を表示
         for result in self.search_results:
-            values = [
-                result['date'],
-                result['column'],
-                result['partner'],
-                result['amount'],
-                result['detail']
-            ]
+            values = [result['date'], result['column'], result['partner'],
+                      result['amount'], result['detail']]
             self.result_tree.insert("", "end", values=values)
 
-        # 結果カウンターの更新
-        # ユーザーに検索の成果を数値で示します
+        # 結果カウンターを更新
         self.result_label.config(text=f"検索結果: {len(self.search_results)} 件")
 
-        # 処理完了のログ出力
-        print(f"検索完了: {len(self.search_results)} 件の結果")
-
     def _clear_results(self):
-        """検索結果とフィールドのクリア処理。
-
-        この関数は新しい検索を開始する前に、前回の検索状態を
-        完全にリセットします。ユーザーが混乱することなく、
-        新鮮な状態で次の検索を開始できるようにします。
         """
-        # 表示されている検索結果の削除
-        # Treeview内の全てのアイテムを削除してクリーンな状態にします
+        検索結果と入力フィールドをクリアする。
+
+        新しい検索を開始する前に、前回の検索状態を
+        リセットする。
+        """
+        # 表示されている検索結果を削除
         for item in self.result_tree.get_children():
             self.result_tree.delete(item)
 
-        # 内部データ構造のリセット
+        # 内部データをリセット
         self.search_results = []
 
-        # ユーザーインターフェースの状態リセット
-        self.result_label.config(text="検索結果: 0 件")  # カウンター表示をリセット
-        self.search_entry.delete(0, tk.END)  # 入力フィールドをクリア
-        self.search_entry.focus_set()  # 入力フィールドにフォーカスを設定
+        # UIをリセット
+        self.result_label.config(text="検索結果: 0 件")
+        self.search_entry.delete(0, tk.END)
+        self.search_entry.focus_set()
 
 
-class ChartDialog(tk.Toplevel):
+class ChartDialog(BaseDialog):
+    """
+    項目別の月間推移グラフを表示するダイアログ。
+
+    総支出、総収入、各項目の月別推移を折れ線グラフで表示し、
+    各データポイントに金額を表示する。
+    matplotlibを使用してグラフを描画する。
+    """
+
     def __init__(self, parent, parent_app):
-        """図表ダイアログの初期化。"""
-        super().__init__(parent)
+        """
+        グラフダイアログを初期化する。
+
+        Args:
+            parent: 親ウィンドウ
+            parent_app: メインアプリケーションのインスタンス
+        """
         self.parent_app = parent_app
+        self.current_column_index = -1  # -1: 総支出、-2: 総収入、1以上: 各項目
+        self.figure = None  # matplotlibのFigureオブジェクト
+        self.canvas = None  # TkinterとmatplotlibをつなぐCanvas
 
-        # ダイアログの設定（サイズを小さく修正）
-        dialog_width = 900
-        dialog_height = 600
-
-        # 親ウィンドウの中央に配置
-        parent_x = self.master.winfo_x()
-        parent_y = self.master.winfo_y()
-        parent_w = self.master.winfo_width()
-        parent_h = self.master.winfo_height()
-
-        x = parent_x + (parent_w - dialog_width) // 2
-        y = parent_y + (parent_h - dialog_height) // 2
-
-        self.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
-        self.minsize(600, 450)  # 元: minsize(800, 600)
-        self.title("項目別月間推移グラフ")
-        self.configure(bg='#f0f0f0')
-
-        # モーダルに設定
-        self.transient(parent)
-        self.grab_set()
-        self.resizable(True, True)
-
-        # 初期表示を総支出に変更（-1は総支出、-2は総収入を表す特別な値）
-        self.current_column_index = -1  # 元: 0
-        self.figure = None
-        self.canvas = None
+        super().__init__(parent, "項目別月間推移グラフ", 900, 600)
 
         self._create_widgets()
         self._update_chart()
 
-        # 強制的にウィンドウを前面に表示
-        self.lift()
-        self.focus_force()
-
     def _create_widgets(self):
-        """ウィジェットを作成。"""
-        # グリッドの重み設定
-        self.grid_rowconfigure(1, weight=1)  # チャートエリアを1に変更
+        """
+        グラフダイアログのUI要素を作成する。
+
+        タイトル、タブボタン（総支出、総収入、各項目）、
+        グラフ表示エリア、閉じるボタンを配置する。
+        """
+        # グリッドレイアウトの設定
+        self.grid_rowconfigure(2, weight=1)  # グラフエリアを伸縮可能に
         self.grid_columnconfigure(0, weight=1)
 
-        # タイトル部分
+        # タイトルセクション
         title_frame = tk.Frame(self, bg='#f0f0f0')
         title_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
 
@@ -1004,52 +963,49 @@ class ChartDialog(tk.Toplevel):
                                font=('Arial', 16, 'bold'), bg='#f0f0f0')
         title_label.pack()
 
-        # タブフレーム（総支出・総収入ボタンと項目タブを同じフレームに配置）
+        # タブセクション
         tab_frame = tk.Frame(self, bg='#f0f0f0')
         tab_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
 
-        # 左側に総支出・総収入ボタンを配置
+        # 総支出・総収入ボタンコンテナ
         summary_button_frame = tk.Frame(tab_frame, bg='#f0f0f0')
-        summary_button_frame.pack(side=tk.LEFT, padx=(0, 15))  # 右側に余白を追加
+        summary_button_frame.pack(side=tk.LEFT, padx=(0, 15))
 
         # 総支出ボタン
-        total_expense_btn = tk.Button(summary_button_frame, text="総支出",
-                                      font=('Arial', 11, 'bold'),
-                                      bg='#f44336', fg='white',
-                                      relief='raised', bd=2,
-                                      activebackground='#d32f2f',
-                                      command=lambda: self._select_summary_tab(-1))
-        total_expense_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self.total_expense_btn = tk.Button(summary_button_frame, text="総支出",
+                                           font=('Arial', 11, 'bold'),
+                                           bg='#f44336', fg='white',
+                                           relief='raised', bd=2,
+                                           activebackground='#d32f2f',
+                                           command=lambda: self._select_tab(-1))
+        self.total_expense_btn.pack(side=tk.LEFT, padx=(0, 5))
 
         # 総収入ボタン
-        total_income_btn = tk.Button(summary_button_frame, text="総収入",
-                                     font=('Arial', 11, 'bold'),
-                                     bg='#4caf50', fg='white',
-                                     relief='raised', bd=2,
-                                     activebackground='#45a049',
-                                     command=lambda: self._select_summary_tab(-2))
-        total_income_btn.pack(side=tk.LEFT)
+        self.total_income_btn = tk.Button(summary_button_frame, text="総収入",
+                                          font=('Arial', 11, 'bold'),
+                                          bg='#4caf50', fg='white',
+                                          relief='raised', bd=2,
+                                          activebackground='#45a049',
+                                          command=lambda: self._select_tab(-2))
+        self.total_income_btn.pack(side=tk.LEFT)
 
-        # ボタンの参照を保存（ハイライト用）
-        self.total_expense_btn = total_expense_btn
-        self.total_income_btn = total_income_btn
-
-        # 区切り線（オプション）
+        # 区切り線
         separator = tk.Frame(tab_frame, bg='#cccccc', width=2)
         separator.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
 
-        # 項目タブボタンを作成
+        # 項目別タブボタン（スクロール可能）
         all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
         self.tab_buttons = []
 
-        # スクロール可能なタブフレーム
+        # スクロール可能なタブコンテナ
         tab_canvas = tk.Canvas(tab_frame, height=35, bg='#f0f0f0', highlightthickness=0)
         tab_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         tab_inner_frame = tk.Frame(tab_canvas, bg='#f0f0f0')
         tab_canvas.create_window((0, 0), window=tab_inner_frame, anchor="nw")
 
-        for i, col_name in enumerate(all_columns[1:], start=1):  # 日付列をスキップ
+        # 各項目のタブボタンを作成（日付列を除く）
+        for i, col_name in enumerate(all_columns[1:], start=1):
             btn = tk.Button(tab_inner_frame, text=col_name,
                             font=('Arial', 10),
                             bg='#e0e0e0', fg='black',
@@ -1058,14 +1014,14 @@ class ChartDialog(tk.Toplevel):
             btn.pack(side=tk.LEFT, padx=2, pady=2, fill=tk.Y)
             self.tab_buttons.append(btn)
 
-        # 初期選択を総支出に変更（ボタンの色を更新）
+        # 初期選択状態を反映
         self._update_button_colors()
 
-        # タブフレームの幅を更新
+        # タブフレームのスクロール領域を設定
         tab_inner_frame.update_idletasks()
         tab_canvas.configure(scrollregion=tab_canvas.bbox("all"))
 
-        # グラフ表示エリア（行番号を2に変更）
+        # グラフ表示セクション
         chart_frame = tk.Frame(self, bg='#f0f0f0')
         chart_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=5)
         chart_frame.grid_rowconfigure(0, weight=1)
@@ -1073,91 +1029,69 @@ class ChartDialog(tk.Toplevel):
 
         # matplotlib設定
         plt.style.use('default')
+        setup_japanese_font()
 
-        # 日本語フォント設定（修正版）
-        try:
-            # 利用可能なフォントを取得
-            available_fonts = [f.name for f in fm.fontManager.ttflist]
-
-            # 日本語フォントの候補（優先順位順）
-            japanese_fonts = [
-                'Yu Gothic', 'Meiryo', 'MS Gothic', 'MS PGothic', 'MS UI Gothic',
-                'Hiragino Sans', 'Hiragino Kaku Gothic Pro', 'Hiragino Kaku Gothic ProN',
-                'Takao', 'IPAexGothic', 'IPAPGothic', 'VL PGothic', 'Noto Sans CJK JP'
-            ]
-
-            # 利用可能な日本語フォントを検索
-            found_font = None
-            for font in japanese_fonts:
-                if font in available_fonts:
-                    found_font = font
-                    break
-
-            if found_font:
-                plt.rcParams['font.family'] = found_font
-                print(f"日本語フォントを設定: {found_font}")
-            else:
-                # 日本語フォントが見つからない場合はデフォルトを使用
-                plt.rcParams['font.family'] = 'DejaVu Sans'
-                print("日本語フォントが見つからないため、DejaVu Sansを使用")
-
-        except Exception as e:
-            print(f"フォント設定エラー: {e}")
-            plt.rcParams['font.family'] = 'DejaVu Sans'
-
-        # 図とキャンバスを作成（サイズを小さく修正）
-        self.figure = plt.Figure(figsize=(10, 5), dpi=80)  # 元: figsize=(12, 6), dpi=100
+        # グラフの作成
+        self.figure = plt.Figure(figsize=(10, 5), dpi=80)
         self.canvas = FigureCanvasTkAgg(self.figure, chart_frame)
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
-        # 閉じるボタン（行番号を4に変更）
+        # 閉じるボタン
         close_btn = tk.Button(self, text="閉じる", font=('Arial', 12),
                               bg='#f44336', fg='white', relief='raised', bd=2,
                               activebackground='#d32f2f', command=self.destroy)
-        close_btn.grid(row=4, column=0, pady=10, ipady=5)
+        close_btn.grid(row=3, column=0, pady=10, ipady=5)
 
         # キーボードショートカット
         self.bind('<Escape>', lambda e: self.destroy())
 
-    def _select_summary_tab(self, summary_type):
-        """総支出・総収入タブを選択。"""
-        self.current_column_index = summary_type
-        self._update_button_colors()
-        self._update_chart()
+    def _select_tab(self, index):
+        """
+        タブを選択してグラフを更新する。
 
-    def _select_tab(self, column_index):
-        """通常タブを選択。"""
-        self.current_column_index = column_index
+        Args:
+            index: -1=総支出、-2=総収入、1以上=各項目のインデックス
+        """
+        self.current_column_index = index
         self._update_button_colors()
         self._update_chart()
 
     def _update_button_colors(self):
-        """ボタンの色を更新。"""
-        # 総支出・総収入ボタンの色をリセット
+        """
+        選択されているタブのボタンの色を更新する。
+
+        選択中のタブは強調表示され、その他のタブは
+        通常の色に戻る。
+        """
+        # すべてのボタンの色をリセット
         self.total_expense_btn.config(bg='#f44336', fg='white')
         self.total_income_btn.config(bg='#4caf50', fg='white')
 
-        # タブボタンの色をリセット
         for btn in self.tab_buttons:
             btn.config(bg='#e0e0e0', fg='black')
 
-        # 現在選択されているものをハイライト
+        # 選択されているボタンを強調
         if self.current_column_index == -1:  # 総支出
             self.total_expense_btn.config(bg='#d32f2f', fg='white')
         elif self.current_column_index == -2:  # 総収入
             self.total_income_btn.config(bg='#45a049', fg='white')
-        elif self.current_column_index > 0 and self.current_column_index - 1 < len(self.tab_buttons):
+        elif 0 < self.current_column_index <= len(self.tab_buttons):
             self.tab_buttons[self.current_column_index - 1].config(bg='#2196f3', fg='white')
 
     def _update_chart(self):
-        """グラフを更新。"""
+        """
+        現在選択されているタブに応じてグラフを更新する。
+
+        データを収集し、折れ線グラフを描画する。
+        各データポイントには金額ラベルを表示する。
+        """
         if not self.figure:
             return
 
-        # 図をクリア
+        # 既存のグラフをクリア
         self.figure.clear()
 
-        # データを収集
+        # 選択されたタブに応じてデータを取得
         if self.current_column_index == -1:  # 総支出
             monthly_data = self._collect_total_expense_data()
             title = "月間総支出の推移"
@@ -1168,8 +1102,8 @@ class ChartDialog(tk.Toplevel):
             title = "月間総収入の推移"
             ylabel = "収入額 (円)"
             color = '#4caf50'
-        else:
-            monthly_data = self._collect_monthly_data()
+        else:  # 各項目
+            monthly_data = self._collect_category_data()
             all_columns = self.parent_app.default_columns + self.parent_app.custom_columns
             column_name = all_columns[self.current_column_index] if self.current_column_index < len(
                 all_columns) else "不明"
@@ -1177,8 +1111,8 @@ class ChartDialog(tk.Toplevel):
             ylabel = "金額 (円)"
             color = '#2196f3'
 
+        # データがない場合の処理
         if not monthly_data:
-            # データがない場合
             ax = self.figure.add_subplot(111)
             ax.text(0.5, 0.5, 'データがありません',
                     horizontalalignment='center', verticalalignment='center',
@@ -1187,7 +1121,7 @@ class ChartDialog(tk.Toplevel):
             self.canvas.draw()
             return
 
-        # グラフを描画
+        # グラフの描画
         ax = self.figure.add_subplot(111)
 
         # データを日付順にソート
@@ -1196,22 +1130,18 @@ class ChartDialog(tk.Toplevel):
         amounts = [item[1] for item in sorted_data]
 
         # 折れ線グラフを描画
-        line = ax.plot(dates, amounts, marker='o', linewidth=2, markersize=8, color=color)[0]
+        ax.plot(dates, amounts, marker='o', linewidth=2, markersize=8, color=color)
 
-        # 各データポイントに数値ラベルを追加
-        for i, (date, amount) in enumerate(zip(dates, amounts)):
-            # 数値を見やすくフォーマット（3桁ごとにカンマ）
-            label_text = f'¥{amount:,}'
-
-            # ラベルの位置を調整（点の少し上に配置）
-            ax.annotate(label_text,
+        # 各データポイントに金額ラベルを追加
+        for date, amount in zip(dates, amounts):
+            ax.annotate(f'¥{amount:,}',  # 3桁ごとにカンマ区切り
                         xy=(date, amount),
-                        xytext=(0, 10),  # 10ピクセル上にオフセット
+                        xytext=(0, 10),  # ポイントの10ピクセル上に配置
                         textcoords='offset points',
-                        ha='center',  # 水平方向は中央揃え
-                        va='bottom',  # 垂直方向は下揃え
+                        ha='center',  # 水平方向の中央揃え
+                        va='bottom',  # 垂直方向の下揃え
                         fontsize=9,
-                        bbox=dict(boxstyle='round,pad=0.3',  # 角丸の背景ボックス
+                        bbox=dict(boxstyle='round,pad=0.3',  # 角丸の背景
                                   facecolor='white',
                                   edgecolor=color,
                                   alpha=0.8))
@@ -1224,17 +1154,17 @@ class ChartDialog(tk.Toplevel):
         # Y軸のフォーマット（カンマ区切り）
         ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x):,}'))
 
-        # X軸のフォーマット
+        # X軸のフォーマット（年/月形式）
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y/%m'))
         ax.xaxis.set_major_locator(mdates.MonthLocator())
 
         # グリッドを表示
         ax.grid(True, alpha=0.3)
 
-        # 日付ラベルを斜めに
+        # X軸のラベルを45度回転
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
 
-        # Y軸の範囲を少し広げて、上部のラベルが切れないようにする
+        # Y軸の範囲を調整（上部のラベルが切れないように）
         y_min, y_max = ax.get_ylim()
         y_range = y_max - y_min
         ax.set_ylim(y_min - y_range * 0.05, y_max + y_range * 0.15)
@@ -1242,14 +1172,21 @@ class ChartDialog(tk.Toplevel):
         # レイアウトを調整
         self.figure.tight_layout()
 
-        # キャンバスを更新
+        # グラフを更新
         self.canvas.draw()
 
     def _collect_total_expense_data(self):
-        """月間総支出データを収集（child_dataから直接計算）。"""
+        """
+        月間総支出データを収集する。
+
+        全期間の各月の総支出額を計算し、
+        月をキー、金額を値とする辞書を返す。
+
+        Returns:
+            dict: {date(年,月,1): 金額} の形式の辞書
+        """
         monthly_totals = {}
 
-        # child_dataから各月のデータを収集
         for dict_key, data_list in self.parent_app.child_data.items():
             try:
                 parts = dict_key.split("-")
@@ -1257,12 +1194,12 @@ class ChartDialog(tk.Toplevel):
                     year = int(parts[0])
                     month = int(parts[1])
                     day = int(parts[2])
-                    col_index = int(parts[3])
 
-                    # まとめ行（day=0）はスキップ
+                    # まとめ行（収入）は除外
                     if day == 0:
                         continue
 
+                    # 月のキーを作成
                     month_key = date(year, month, 1)
                     if month_key not in monthly_totals:
                         monthly_totals[month_key] = 0
@@ -1270,23 +1207,25 @@ class ChartDialog(tk.Toplevel):
                     # 各取引の金額を合計
                     for row in data_list:
                         if len(row) > 1:
-                            try:
-                                amount_str = str(row[1]).replace(',', '').replace('¥', '').strip()
-                                if amount_str:
-                                    amount = int(amount_str)
-                                    monthly_totals[month_key] += amount
-                            except ValueError:
-                                pass
+                            amount = self._parse_amount(row[1])
+                            monthly_totals[month_key] += amount
             except (ValueError, IndexError):
                 continue
 
         return monthly_totals
 
     def _collect_total_income_data(self):
-        """月間総収入データを収集（child_dataから直接計算）。"""
+        """
+        月間総収入データを収集する。
+
+        各月のまとめ行（day=0）の収入列（col_index=3）から
+        収入データを抽出し、月別に集計する。
+
+        Returns:
+            dict: {date(年,月,1): 金額} の形式の辞書
+        """
         monthly_totals = {}
 
-        # child_dataから各月のまとめ行の収入データを収集
         for dict_key, data_list in self.parent_app.child_data.items():
             try:
                 parts = dict_key.split("-")
@@ -1296,20 +1235,12 @@ class ChartDialog(tk.Toplevel):
                     day = int(parts[2])
                     col_index = int(parts[3])
 
-                    # まとめ行（day=0）かつ収入列（col_index=3）のみ対象
+                    # まとめ行の収入列のみ対象
                     if day == 0 and col_index == 3:
                         month_key = date(year, month, 1)
 
-                        # 収入データの合計
-                        total_income = 0
-                        for row in data_list:
-                            if len(row) > 1:
-                                try:
-                                    income_str = str(row[1]).replace(',', '').replace('¥', '').strip()
-                                    if income_str:
-                                        total_income += int(income_str)
-                                except ValueError:
-                                    pass
+                        # 収入データを合計
+                        total_income = sum(self._parse_amount(row[1]) for row in data_list if len(row) > 1)
 
                         if total_income > 0:
                             monthly_totals[month_key] = total_income
@@ -1318,11 +1249,18 @@ class ChartDialog(tk.Toplevel):
 
         return monthly_totals
 
-    def _collect_monthly_data(self):
-        """月間データを収集（child_dataから直接集計）。"""
+    def _collect_category_data(self):
+        """
+        特定項目の月間データを収集する。
+
+        現在選択されている項目（current_column_index）の
+        月別合計を計算し、辞書形式で返す。
+
+        Returns:
+            dict: {date(年,月,1): 金額} の形式の辞書
+        """
         monthly_totals = {}
 
-        # child_dataから各月のデータを収集
         for dict_key, data_list in self.parent_app.child_data.items():
             try:
                 parts = dict_key.split("-")
@@ -1332,11 +1270,11 @@ class ChartDialog(tk.Toplevel):
                     day = int(parts[2])
                     col_index = int(parts[3])
 
-                    # まとめ行（day=0）はスキップ
+                    # まとめ行は除外
                     if day == 0:
                         continue
 
-                    # 指定された列のデータのみを処理
+                    # 選択された列のデータのみ処理
                     if col_index == self.current_column_index:
                         month_key = date(year, month, 1)
                         if month_key not in monthly_totals:
@@ -1345,183 +1283,492 @@ class ChartDialog(tk.Toplevel):
                         # 各取引の金額を合計
                         for row in data_list:
                             if len(row) > 1:
-                                try:
-                                    amount_str = str(row[1]).replace(',', '').replace('¥', '').strip()
-                                    if amount_str:
-                                        amount = int(amount_str)
-                                        monthly_totals[month_key] += amount
-                                except ValueError:
-                                    pass
+                                amount = self._parse_amount(row[1])
+                                monthly_totals[month_key] += amount
             except (ValueError, IndexError):
                 continue
 
         return monthly_totals
 
+    def _parse_amount(self, amount_str):
+        """
+        金額文字列を整数に変換する。
 
-class YearApp:
-    def __init__(self, root):
-        """メインウィンドウの初期化処理。"""
-        self.root = root
-        self._setup_root()
-        self._init_variables()
-        self._load_settings()
-        self._load_data_from_file()
-        self._create_frames_and_widgets()
-        self._show_month_sheet(self.current_month)
-        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
+        Args:
+            amount_str: 金額を表す文字列
 
-        # 検索のキーボードショートカットを追加
-        self.root.bind('<Control-f>', self._open_search_dialog)
-
-    def _setup_root(self):
-        """メインウィンドウの基本設定。"""
-        self.root.title("💰 家計管理 2025")
-
-        # ウィンドウサイズの設定
-        window_width = 1400
-        window_height = 1000
-
-        # 画面サイズを取得
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-
-        # 中央配置のための座標を計算
-        # 画面の幅からウィンドウ幅を引いて2で割ると、左右の余白が均等になります
-        x = (screen_width - window_width) // 2
-        y = (screen_height - window_height) // 2
-
-        # ウィンドウの位置とサイズを設定
-        # geometry()メソッドは "幅x高さ+X座標+Y座標" の形式で指定します
-        self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
-
-        self.root.minsize(1200, 800)  # 最小サイズも調整
-        self.root.resizable(True, True)
-
-        # モダンなダークテーマベースの配色
-        self.colors = {
-            'bg_primary': '#1e1e2e',  # メイン背景
-            'bg_secondary': '#313244',  # セカンダリ背景
-            'bg_tertiary': '#45475a',  # サードレベル背景
-            'accent': '#89b4fa',  # アクセントカラー（青）
-            'accent_green': '#a6e3a1',  # 緑アクセント
-            'accent_red': '#f38ba8',  # 赤アクセント
-            'accent_yellow': '#f9e2af',  # 黄アクセント
-            'text_primary': '#cdd6f4',  # メインテキスト
-            'text_secondary': '#bac2de',  # セカンダリテキスト
-            'text_muted': '#6c7086',  # ミュートテキスト
-            'border': '#585b70',  # ボーダー
-            'hover': '#74c0fc'  # ホバー効果
-        }
-
-        self.root.configure(bg=self.colors['bg_primary'])
-
-        # スタイル設定
-        style = ttk.Style()
-        style.theme_use('clam')
-
-        # カスタムスタイルを定義
-        self._setup_modern_styles(style)
-
-    def _init_variables(self):
-        """アプリ内で使う各種変数を初期化する。"""
-        now = datetime.now()
-        self.current_year = now.year
-        self.current_month = now.month
-        self.tree = None
-        self.child_data = {}
-        # self.parent_table_data = {} を削除
-        self.transaction_partners = set()
-
-        # デフォルトの列定義
-        self.default_columns = [
-            "日付", "交通", "外食", "食品", "日常用品", "通販", "ゲーム課金",
-            "ゲーム購入", "サービス", "家賃", "公共料金", "携帯・回線", "保険", "他"
-        ]
-        self.custom_columns = []
-
-    def _load_settings(self):
-        """設定ファイルから設定を読み込む。"""
-        if os.path.exists(SETTINGS_FILE):
-            try:
-                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                    settings = json.load(f)
-                    self.custom_columns = settings.get("custom_columns", [])
-                    self.transaction_partners = set(settings.get("transaction_partners", []))
-            except Exception as e:
-                print(f"設定ファイル読み込みエラー: {e}")
-
-    def _save_settings(self):
-        """設定をファイルに保存する。"""
-        settings = {
-            "custom_columns": self.custom_columns,
-            "transaction_partners": list(self.transaction_partners)
-        }
+        Returns:
+            int: パースされた金額（失敗時は0）
+        """
+        if not amount_str:
+            return 0
         try:
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(settings, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"設定ファイル保存エラー: {e}")
+            clean_amount = str(amount_str).replace(',', '').replace('¥', '').strip()
+            return int(clean_amount) if clean_amount else 0
+        except ValueError:
+            return 0
 
-    def _load_data_from_file(self):
-        """JSONファイルからデータを読み込む（簡略化版）。"""
-        if not os.path.exists(DATA_FILE):
+class TransactionDialog(BaseDialog):
+    """
+    取引詳細を入力・編集するダイアログ。
+
+    特定の日付・項目の取引データ（取引先、金額、詳細）を
+    テーブル形式で入力・編集できる。
+    取引先の入力時には過去の履歴から候補を表示する。
+    """
+
+    def __init__(self, parent, parent_app, dict_key, col_name):
+        """
+        取引詳細ダイアログを初期化する。
+
+        Args:
+            parent: 親ウィンドウ
+            parent_app: メインアプリケーションのインスタンス
+            dict_key: データのキー（年-月-日-列インデックス）
+            col_name: 項目名（表示用）
+        """
+        self.parent_app = parent_app
+        self.dict_key = dict_key
+        self.col_name = col_name
+        self.entry_editor = None  # セル編集用のエディター
+
+        # キーを解析して年月日と列インデックスを取得
+        parts = dict_key.split("-")
+        if len(parts) == 4:
+            self.year = int(parts[0])
+            self.month = int(parts[1])
+            self.day = int(parts[2])
+            self.col_index = int(parts[3])
+        else:
+            self.year = self.month = self.day = self.col_index = 0
+
+        super().__init__(parent, f"支出・収入詳細 - {col_name}", 700, 500)
+
+        self._create_widgets()
+
+    def _create_widgets(self):
+        """
+        取引詳細ダイアログのUI要素を作成する。
+
+        タイトル、取引データ編集用のTreeview、
+        行追加ボタン、OK/キャンセルボタンなどを配置する。
+        """
+        # グリッドレイアウトの設定
+        self.grid_rowconfigure(1, weight=1)  # Treeviewエリアを伸縮可能に
+        self.grid_columnconfigure(0, weight=1)
+
+        # タイトル
+        title_label = tk.Label(self, text=f"{self.col_name} の詳細入力",
+                               font=('Arial', 16, 'bold'), bg='#f0f0f0')
+        title_label.grid(row=0, column=0, pady=(10, 15), sticky="ew")
+
+        # Treeviewコンテナ
+        tree_container = tk.Frame(self, bg='#f0f0f0')
+        tree_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        tree_container.grid_rowconfigure(0, weight=1)
+        tree_container.grid_columnconfigure(0, weight=1)
+
+        # 取引データ編集用Treeview
+        columns = ["取引先", "金額", "詳細"]
+        self.tree = ttk.Treeview(tree_container, columns=columns, show="headings")
+
+        # 列の設定
+        self.tree.heading("取引先", text="取引先")
+        self.tree.heading("金額", text="金額")
+        self.tree.heading("詳細", text="詳細")
+
+        self.tree.column("取引先", anchor="center", width=150, minwidth=100)
+        self.tree.column("金額", anchor="center", width=100, minwidth=80)
+        self.tree.column("詳細", anchor="center", width=200, minwidth=150)
+
+        self.tree.grid(row=0, column=0, sticky="nsew")
+
+        # スクロールバー
+        scrollbar = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.tree.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.tree.configure(yscrollcommand=scrollbar.set)
+
+        # イベントバインド
+        self.tree.bind("<Double-1>", self._on_double_click)  # ダブルクリックで編集
+        self.tree.bind("<Button-3>", self._on_right_click)  # 右クリックでメニュー
+
+        # ボタンコンテナ
+        button_frame = tk.Frame(self, bg='#f0f0f0')
+        button_frame.grid(row=2, column=0, sticky="ew", pady=(15, 10), padx=10)
+
+        # 行追加ボタン
+        add_btn = tk.Button(button_frame, text="行を追加", font=('Arial', 12),
+                            bg='#4caf50', fg='white', relief='raised', bd=2,
+                            activebackground='#45a049', command=self._add_row)
+        add_btn.pack(side=tk.LEFT, padx=(0, 10), ipady=5)
+
+        # 右側のボタングループ
+        right_button_frame = tk.Frame(button_frame, bg='#f0f0f0')
+        right_button_frame.pack(side=tk.RIGHT)
+
+        # キャンセルボタン
+        cancel_btn = tk.Button(right_button_frame, text="キャンセル", font=('Arial', 12),
+                               bg='#f44336', fg='white', relief='raised', bd=2,
+                               activebackground='#d32f2f', command=self.destroy)
+        cancel_btn.pack(side=tk.RIGHT, padx=(10, 0), ipady=5)
+
+        # OKボタン
+        ok_btn = tk.Button(right_button_frame, text="OK", font=('Arial', 12, 'bold'),
+                           bg='#2196f3', fg='white', relief='raised', bd=2,
+                           activebackground='#1976d2', command=self._on_ok)
+        ok_btn.pack(side=tk.RIGHT, ipady=5)
+
+        # 右クリックメニュー
+        self.context_menu = tk.Menu(self, tearoff=0)
+        self.context_menu.add_command(label="行を削除", command=self._delete_row)
+
+        # 使用方法のヒント
+        hint_label = tk.Label(self, text="使い方: セルをダブルクリックで編集、右クリックで行削除",
+                              font=('Arial', 10), fg='#666666', bg='#f0f0f0')
+        hint_label.grid(row=3, column=0, pady=(5, 10))
+
+        # キーボードショートカット
+        self.bind('<Return>', lambda e: self._on_ok())
+        self.bind('<Escape>', lambda e: self.destroy())
+        self.tree.bind("<MouseWheel>", self._on_mousewheel)
+
+        # データを読み込む（少し遅延させて確実に表示）
+        self.after(50, self._load_data)
+
+    def _on_mousewheel(self, event):
+        """マウスホイールによるスクロール処理。"""
+        self.tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _load_data(self):
+        """
+        既存のデータを読み込んでTreeviewに表示する。
+
+        child_dataから該当するデータを取得し、
+        各行をTreeviewに挿入する。
+        データがない場合は空行を1つ追加する。
+        """
+        # 既存の表示をクリア
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        # child_dataからデータを取得
+        data_list = self.parent_app.child_data.get(self.dict_key, [])
+
+        if not data_list:
+            # データがない場合は空行を1つ追加
+            self.tree.insert("", "end", values=["", "", ""])
+        else:
+            # 既存データを表示
+            for row in data_list:
+                # 3要素に統一（不足分は空文字で補完）
+                row_data = list(row) if row else ["", "", ""]
+                while len(row_data) < 3:
+                    row_data.append("")
+                self.tree.insert("", "end", values=row_data)
+
+            # 最後に空行を追加（新規入力用）
+            self.tree.insert("", "end", values=["", "", ""])
+
+    def _add_row(self):
+        """
+        新しい空行を追加する。
+
+        Treeviewの最後に空行を追加し、
+        その行を選択状態にして見えるようにスクロールする。
+        """
+        item_id = self.tree.insert("", "end", values=["", "", ""])
+        self.tree.selection_set(item_id)
+        self.tree.see(item_id)
+
+    def _on_double_click(self, event):
+        """
+        セルのダブルクリックイベントを処理する。
+
+        クリックされたセルの位置にエディターを表示し、
+        インライン編集を可能にする。
+        取引先列の場合はコンボボックス、その他はEntryを使用。
+        """
+        # 既存のエディターがあれば保存してから削除
+        if self.entry_editor:
+            self._cancel_edit()
+
+        # クリック位置から行と列を特定
+        item_id = self.tree.identify_row(event.y)
+        col_id = self.tree.identify_column(event.x)
+
+        if not item_id or not col_id:
+            return
+
+        # セルの境界ボックスを取得
+        bbox = self.tree.bbox(item_id, col_id)
+        if not bbox:
+            return
+
+        # 列インデックスと現在の値を取得
+        col_idx = int(col_id[1:]) - 1
+        values = list(self.tree.item(item_id, 'values'))
+
+        # 値が不足している場合は空文字で補完
+        while len(values) <= col_idx:
+            values.append("")
+
+        x, y, w, h = bbox
+
+        if col_idx == 0:  # 取引先列の場合
+            # コンボボックスを作成（過去の取引先履歴を候補として表示）
+            self.entry_editor = ttk.Combobox(self.tree, font=("Arial", 11))
+            partner_list = sorted(list(self.parent_app.transaction_partners))
+            self.entry_editor['values'] = partner_list
+            self.entry_editor.set(values[col_idx])
+        else:
+            # その他の列はEntryを作成
+            self.entry_editor = tk.Entry(self.tree, font=("Arial", 11))
+            self.entry_editor.insert(0, str(values[col_idx]))
+
+        # エディターを配置
+        self.entry_editor.place(x=x, y=y, width=w, height=h)
+        self.entry_editor.focus_set()
+        self.entry_editor.select_range(0, tk.END)
+
+        # エディターのイベントバインド
+        self.entry_editor.bind("<Return>", lambda e: self._save_edit(item_id, col_idx))
+        self.entry_editor.bind("<Tab>", lambda e: self._save_edit(item_id, col_idx))
+        self.entry_editor.bind("<FocusOut>", lambda e: self._save_edit(item_id, col_idx))
+        self.entry_editor.bind("<Escape>", lambda e: self._cancel_edit())
+
+        # Treeviewの他の場所をクリックしたら保存
+        self.tree.bind("<Button-1>", lambda e: self._save_edit(item_id, col_idx) if self.entry_editor else None,
+                       add=True)
+
+    def _save_edit(self, item_id, col_idx):
+        """
+        エディターの内容を保存する。
+
+        Args:
+            item_id: 編集中の行のID
+            col_idx: 編集中の列のインデックス
+        """
+        if not self.entry_editor:
             return
 
         try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                all_data = json.load(f)
+            # エディターから値を取得
+            new_value = self.entry_editor.get()
 
-            # 新しいフォーマットか確認
-            if "version" in all_data:
-                self.child_data = all_data.get("child_data", {})
-            else:
-                # 古いフォーマット（後方互換性）
-                self.child_data = all_data.get("child_data", {})
-                self._extract_transaction_partners_from_old_data()
+            # エディターを削除
+            self.entry_editor.destroy()
+            self.entry_editor = None
 
-        except Exception as e:
-            print(f"データファイル読み込みエラー: {e}")
+            # 取引先の場合は履歴に追加
+            if col_idx == 0 and new_value.strip():
+                self.parent_app.transaction_partners.add(new_value.strip())
 
-    def _extract_transaction_partners_from_old_data(self):
-        """古いデータから取引先を抽出する。"""
-        for key, data_list in self.child_data.items():
-            for row in data_list:
-                if len(row) > 0 and row[0].strip():
-                    self.transaction_partners.add(row[0].strip())
+            # Treeviewの値を更新
+            values = list(self.tree.item(item_id, 'values'))
+            while len(values) <= col_idx:
+                values.append("")
 
-    def _save_data_to_file(self):
-        """データをJSONファイルに保存する（簡略化版）。"""
-        all_data = {
-            "version": "2.0",
-            "child_data": self.child_data
-        }
+            values[col_idx] = new_value
+            self.tree.item(item_id, values=values)
+
+            # 最終行に入力があったら新しい空行を追加
+            all_items = self.tree.get_children()
+            if item_id == all_items[-1] and any(str(cell).strip() for cell in values):
+                self._add_row()
+
+            # 一時的なイベントバインドを解除
+            self.tree.unbind("<Button-1>")
+        except Exception:
+            # エラーが発生してもエディターは削除
+            if self.entry_editor:
+                self.entry_editor.destroy()
+                self.entry_editor = None
+
+    def _cancel_edit(self):
+        """
+        編集をキャンセルしてエディターを削除する。
+        """
+        if self.entry_editor:
+            try:
+                self.entry_editor.destroy()
+            except:
+                pass
+            self.entry_editor = None
+
+        # 一時的なイベントバインドを解除
         try:
-            with open(DATA_FILE, "w", encoding="utf-8") as f:
-                json.dump(all_data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"データファイル保存エラー: {e}")
+            self.tree.unbind("<Button-1>")
+        except:
+            pass
 
-    def _on_closing(self):
-        """ウィンドウ終了時の処理。"""
-        self._save_data_to_file()
-        self._save_settings()
-        self.root.destroy()
+    def _on_right_click(self, event):
+        """
+        右クリックイベントを処理してコンテキストメニューを表示する。
 
-    def _open_search_dialog(self, event=None):
-        """検索ダイアログを開く。"""
-        SearchDialog(self.root, self)
+        クリックされた行を選択状態にしてから、
+        マウス位置にメニューを表示する。
+        """
+        item_id = self.tree.identify_row(event.y)
+        if item_id:
+            self.tree.selection_set(item_id)
+            self.context_menu.post(event.x_root, event.y_root)
 
-    def _open_chart_dialog(self, event=None):
-        """図表ダイアログを開く。"""
-        ChartDialog(self.root, self)
+    def _delete_row(self):
+        """
+        選択された行を削除する。
 
-    def _open_monthly_data_dialog(self, event=None):
-        """月間データダイアログを開く。"""
-        MonthlyDataDialog(self.root, self, self.current_year, self.current_month)
+        確認ダイアログを表示してから削除を実行する。
+        """
+        selected_item = self.tree.selection()
+        if selected_item and messagebox.askyesno("確認", "選択された行を削除しますか？"):
+            self.tree.delete(selected_item[0])
 
-    def _setup_modern_styles(self, style):
-        """モダンなスタイルを設定。"""
-        # ボタンスタイル（小さく）
+    def _on_ok(self):
+        """
+        OKボタンの処理。
+
+        Treeviewのデータを収集し、空行を除去してから
+        child_dataに保存する。データがない場合は
+        該当するキーを削除する。
+        """
+        # すべての行データを収集
+        all_rows = []
+        for item_id in self.tree.get_children():
+            values = self.tree.item(item_id, 'values')
+            # 3要素に統一
+            row = list(values)
+            while len(row) < 3:
+                row.append("")
+            all_rows.append(tuple(row))
+
+        # 空行を除去（すべての列が空またはスペースのみの行を除外）
+        filtered_rows = [row for row in all_rows if any(str(cell).strip() for cell in row)]
+
+        if not filtered_rows:
+            # データが空の場合
+            # 親セルを空白に更新
+            dict_key_day = f"{self.year}-{self.month}-{self.day}"
+            self.parent_app.update_parent_cell(dict_key_day, self.col_index, "")
+
+            # child_dataからキーを削除
+            if self.dict_key in self.parent_app.child_data:
+                del self.parent_app.child_data[self.dict_key]
+        else:
+            # データがある場合
+            # child_dataに保存
+            self.parent_app.child_data[self.dict_key] = filtered_rows
+
+            # 金額列（インデックス1）を合計
+            total = sum(self._parse_amount(row[1]) for row in filtered_rows if len(row) > 1)
+
+            # 親セルを更新（合計が0の場合は空文字列）
+            dict_key_day = f"{self.year}-{self.month}-{self.day}"
+            display_value = str(total) if total != 0 else ""
+            self.parent_app.update_parent_cell(dict_key_day, self.col_index, display_value)
+
+        self.destroy()
+
+    def _parse_amount(self, amount_str):
+        """
+        金額文字列を整数に変換する。
+
+        Args:
+            amount_str: 金額を表す文字列
+
+        Returns:
+            int: パースされた金額（失敗時は0）
+        """
+        if not amount_str:
+            return 0
+        try:
+            clean_amount = str(amount_str).replace(',', '').replace('¥', '').strip()
+            return int(clean_amount) if clean_amount else 0
+        except ValueError:
+            return 0
+
+class HouseholdApp:
+    """
+    家計管理アプリケーションのメインクラス。
+
+    年間の家計データを月別に管理し、項目ごとの支出・収入を
+    記録・集計・分析する機能を提供する。
+    データはJSONファイルに保存され、カスタム項目の追加や
+    取引先の履歴管理もサポートする。
+    """
+
+    def __init__(self, root):
+        """
+        アプリケーションを初期化する。
+
+        Args:
+            root: TkinterのルートウィンドウInternet Explorer
+        """
+        self.root = root
+        self._setup_window()
+        self._initialize_data()
+        self._load_settings()
+        self._load_data()
+        self._create_ui()
+        self._show_month(self.current_month)
+
+        # ウィンドウクローズ時の処理を設定
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
+
+        # グローバルキーボードショートカット
+        self.root.bind('<Control-f>', lambda e: SearchDialog(self.root, self))
+
+    def _setup_window(self):
+        """
+        メインウィンドウの基本設定を行う。
+
+        ウィンドウのタイトル、サイズ、位置、配色などを設定し、
+        ttkスタイルを定義する。
+        """
+        self.root.title("💰 家計管理 2025")
+
+        # ウィンドウサイズと位置の設定
+        window_width = 1400
+        window_height = 1000
+
+        # 画面の中央に配置
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+
+        self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        self.root.minsize(1200, 800)
+        self.root.resizable(True, True)
+
+        # カラーテーマの定義（ダークテーマベース）
+        self.colors = {
+            'bg_primary': '#1e1e2e',  # メイン背景色
+            'bg_secondary': '#313244',  # セカンダリ背景色
+            'bg_tertiary': '#45475a',  # 第三背景色
+            'accent': '#89b4fa',  # アクセントカラー（青）
+            'accent_green': '#a6e3a1',  # 緑のアクセント
+            'accent_red': '#f38ba8',  # 赤のアクセント
+            'text_primary': '#cdd6f4',  # プライマリテキスト
+            'text_secondary': '#bac2de',  # セカンダリテキスト
+            'border': '#585b70',  # ボーダー色
+            'hover': '#74c0fc'  # ホバー時の色
+        }
+
+        self.root.configure(bg=self.colors['bg_primary'])
+        self._setup_styles()
+
+    def _setup_styles(self):
+        """
+        ttkウィジェットのカスタムスタイルを定義する。
+
+        ボタン、ラベルなどの見た目を統一し、
+        モダンなUIを実現する。
+        """
+        style = ttk.Style()
+        style.theme_use('clam')
+
+        # 通常のボタンスタイル
         style.configure('Modern.TButton',
                         background=self.colors['bg_secondary'],
                         foreground=self.colors['text_primary'],
@@ -1535,7 +1782,7 @@ class YearApp:
                               ('pressed', self.colors['accent'])],
                   foreground=[('active', '#ffffff')])
 
-        # アクセントボタン
+        # アクセントボタンスタイル
         style.configure('Accent.TButton',
                         background=self.colors['accent'],
                         foreground='#ffffff',
@@ -1548,7 +1795,7 @@ class YearApp:
                   background=[('active', self.colors['hover']),
                               ('pressed', '#4dabf7')])
 
-        # 月ボタン（クリック可能）
+        # 月表示ボタンスタイル
         style.configure('Month.TButton',
                         background=self.colors['accent'],
                         foreground='#ffffff',
@@ -1561,7 +1808,7 @@ class YearApp:
                   background=[('active', self.colors['hover']),
                               ('pressed', '#4dabf7')])
 
-        # 選択された月ボタン（小さく）
+        # 選択された月ボタンスタイル
         style.configure('Selected.TButton',
                         background=self.colors['accent'],
                         foreground='#ffffff',
@@ -1570,7 +1817,7 @@ class YearApp:
                         font=('Segoe UI', 9, 'bold'),
                         relief='flat')
 
-        # 年ナビゲーションボタン（小さく）
+        # ナビゲーションボタンスタイル
         style.configure('Nav.TButton',
                         background=self.colors['bg_tertiary'],
                         foreground=self.colors['text_primary'],
@@ -1583,60 +1830,157 @@ class YearApp:
                   background=[('active', self.colors['accent']),
                               ('pressed', self.colors['hover'])])
 
-        # 追加ボタン
-        style.configure('Add.TButton',
-                        background=self.colors['accent_green'],
-                        foreground='#1e1e2e',
-                        borderwidth=0,
-                        focuscolor='none',
-                        font=('Segoe UI', 11, 'bold'),
-                        relief='flat')
+    def _initialize_data(self):
+        """
+        アプリケーションのデータ構造を初期化する。
 
-        style.map('Add.TButton',
-                  background=[('active', '#94d82d'),
-                              ('pressed', '#74c0fc')])
+        現在の日付、データ格納用の辞書、デフォルトの項目などを設定する。
+        """
+        now = datetime.now()
+        self.current_year = now.year
+        self.current_month = now.month
+        self.tree = None  # メインのTreeviewウィジェット
+        self.child_data = {}  # 詳細データを格納する辞書
+        self.transaction_partners = set()  # 取引先の履歴
 
-        # 列追加ボタンスタイル
-        style.configure('AddColumn.TButton',
-                        background='#e8e8e8',
-                        foreground='#333333',
-                        borderwidth=1,
-                        focuscolor='none',
-                        font=('Arial', 12, 'bold'),
-                        relief='raised')
+        # デフォルトの支出項目
+        self.default_columns = [
+            "日付", "交通", "外食", "食品", "日常用品", "通販", "ゲーム課金",
+            "ゲーム購入", "サービス", "家賃", "公共料金", "携帯・回線", "保険", "他"
+        ]
+        self.custom_columns = []  # ユーザー定義の項目
 
-        style.map('AddColumn.TButton',
-                  background=[('active', '#d0d0d0'),
-                              ('pressed', '#b0b0b0')])
+    def _load_settings(self):
+        """
+        設定ファイルから設定を読み込む。
 
-    def _create_frames_and_widgets(self):
-        """メインウィンドウのウィジェットを作成。"""
-        # メインコンテナ
+        カスタム項目と取引先履歴を復元する。
+        ファイルが存在しない場合や読み込みエラーの場合は
+        デフォルト値を使用する。
+        """
+        if os.path.exists(SETTINGS_FILE):
+            try:
+                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+                    self.custom_columns = settings.get("custom_columns", [])
+                    self.transaction_partners = set(settings.get("transaction_partners", []))
+            except Exception:
+                # エラーが発生しても続行（デフォルト値を使用）
+                pass
+
+    def _save_settings(self):
+        """
+        設定をファイルに保存する。
+
+        カスタム項目と取引先履歴をJSONファイルに保存する。
+        """
+        settings = {
+            "custom_columns": self.custom_columns,
+            "transaction_partners": list(self.transaction_partners)
+        }
+        try:
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+        except Exception:
+            # 保存エラーは無視（次回起動時にデフォルト値が使用される）
+            pass
+
+    def _load_data(self):
+        """
+        データファイルから家計データを読み込む。
+
+        JSONファイルからchild_dataを復元する。
+        旧フォーマットとの互換性も維持する。
+        """
+        if not os.path.exists(DATA_FILE):
+            return
+
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                all_data = json.load(f)
+
+            if "version" in all_data:
+                # 新フォーマット
+                self.child_data = all_data.get("child_data", {})
+            else:
+                # 旧フォーマット（後方互換性）
+                self.child_data = all_data.get("child_data", {})
+                self._extract_partners_from_data()
+        except Exception:
+            # 読み込みエラーは無視（空のデータで開始）
+            pass
+
+    def _extract_partners_from_data(self):
+        """
+        既存のデータから取引先を抽出して履歴に追加する。
+
+        旧フォーマットのデータから取引先情報を
+        抽出するための互換性処理。
+        """
+        for data_list in self.child_data.values():
+            for row in data_list:
+                if len(row) > 0 and row[0].strip():
+                    self.transaction_partners.add(row[0].strip())
+
+    def _save_data(self):
+        """
+        家計データをファイルに保存する。
+
+        child_dataをJSONファイルに保存する。
+        バージョン情報を含めて新フォーマットで保存。
+        """
+        all_data = {
+            "version": "2.0",
+            "child_data": self.child_data
+        }
+        try:
+            with open(DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(all_data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            # 保存エラーは無視（データ損失を防ぐため例外を再発生させない）
+            pass
+
+    def _on_closing(self):
+        """
+        ウィンドウが閉じられる時の処理。
+
+        データと設定を保存してからアプリケーションを終了する。
+        """
+        self._save_data()
+        self._save_settings()
+        self.root.destroy()
+
+    def _create_ui(self):
+        """
+        メインウィンドウのUI要素を作成する。
+
+        ヘッダー（年選択、月選択、ボタン類）と
+        メインのデータ表示エリア（Treeview）を配置する。
+        """
+        # メインコンテナ（全体を包含するフレーム）
         main_container = tk.Frame(self.root, bg=self.colors['bg_primary'])
         main_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        # コンパクトなヘッダーセクション
-        header_section = tk.Frame(main_container, bg=self.colors['bg_secondary'], relief='flat', bd=0)
-        header_section.pack(fill=tk.X, pady=(0, 8))
+        # ヘッダーセクション
+        header = tk.Frame(main_container, bg=self.colors['bg_secondary'])
+        header.pack(fill=tk.X, pady=(0, 8))
 
-        # 内側のパディング（小さく）
-        header_inner = tk.Frame(header_section, bg=self.colors['bg_secondary'])
+        header_inner = tk.Frame(header, bg=self.colors['bg_secondary'])
         header_inner.pack(fill=tk.X, padx=15, pady=8)
 
-        # 年選択部分（左側、コンパクト）
+        # 年選択コントロール（左側）
         year_container = tk.Frame(header_inner, bg=self.colors['bg_secondary'])
         year_container.pack(side=tk.LEFT)
 
-        # 年ナビゲーション（小さく）
-        year_nav_frame = tk.Frame(year_container, bg=self.colors['bg_secondary'])
-        year_nav_frame.pack()
+        year_nav = tk.Frame(year_container, bg=self.colors['bg_secondary'])
+        year_nav.pack()
 
-        self.minus_button = ttk.Button(year_nav_frame, text="◀", width=3, style='Nav.TButton',
-                                       command=self._decrease_year)
-        self.minus_button.pack(side=tk.LEFT, padx=(0, 4))
+        # 前年ボタン
+        ttk.Button(year_nav, text="◀", width=3, style='Nav.TButton',
+                   command=self._prev_year).pack(side=tk.LEFT, padx=(0, 4))
 
-        # 年表示（小さく）
-        year_display = tk.Frame(year_nav_frame, bg=self.colors['bg_tertiary'], relief='flat')
+        # 年表示
+        year_display = tk.Frame(year_nav, bg=self.colors['bg_tertiary'])
         year_display.pack(side=tk.LEFT, padx=4)
 
         self.year_label = tk.Label(year_display, text=str(self.current_year),
@@ -1646,11 +1990,11 @@ class YearApp:
                                    padx=12, pady=4)
         self.year_label.pack()
 
-        self.plus_button = ttk.Button(year_nav_frame, text="▶", width=3, style='Nav.TButton',
-                                      command=self._increase_year)
-        self.plus_button.pack(side=tk.LEFT, padx=(4, 0))
+        # 翌年ボタン
+        ttk.Button(year_nav, text="▶", width=3, style='Nav.TButton',
+                   command=self._next_year).pack(side=tk.LEFT, padx=(4, 0))
 
-        # 月選択ボタン（インライン、小さく）
+        # 月選択ボタン（1月〜12月）
         month_container = tk.Frame(header_inner, bg=self.colors['bg_secondary'])
         month_container.pack(side=tk.LEFT, padx=(20, 0))
 
@@ -1661,94 +2005,93 @@ class YearApp:
             btn.pack(side=tk.LEFT, padx=1)
             self.month_buttons.append(btn)
 
-        # 検索ボタンを追加（月選択ボタンの右側）
+        # 検索ボタン
         search_container = tk.Frame(header_inner, bg=self.colors['bg_secondary'])
         search_container.pack(side=tk.LEFT, padx=(20, 0))
 
-        search_btn = ttk.Button(search_container, text="🔍 検索 (Ctrl+F)", width=15, style='Accent.TButton',
-                                command=self._open_search_dialog)
-        search_btn.pack()
+        ttk.Button(search_container, text="🔍 検索 (Ctrl+F)", width=15, style='Accent.TButton',
+                   command=lambda: SearchDialog(self.root, self)).pack()
 
-        # 図表ボタンを追加（検索ボタンの右側）
+        # 図表ボタン
         chart_container = tk.Frame(header_inner, bg=self.colors['bg_secondary'])
         chart_container.pack(side=tk.LEFT, padx=(10, 0))
 
-        chart_btn = ttk.Button(chart_container, text="📊 図表", width=10, style='Accent.TButton',
-                               command=self._open_chart_dialog)
-        chart_btn.pack()
+        ttk.Button(chart_container, text="📊 図表", width=10, style='Accent.TButton',
+                   command=lambda: ChartDialog(self.root, self)).pack()
 
-        # 現在月表示（右側、クリック可能なボタンに変更）
-        month_info_frame = tk.Frame(header_inner, bg=self.colors['bg_secondary'])
-        month_info_frame.pack(side=tk.RIGHT)
+        # 現在月表示（右側、クリック可能）
+        month_info = tk.Frame(header_inner, bg=self.colors['bg_secondary'])
+        month_info.pack(side=tk.RIGHT)
 
-        # 月ボタン（クリック可能）
-        self.current_month_button = ttk.Button(month_info_frame,
+        self.current_month_button = ttk.Button(month_info,
                                                text=f"📅 {self.current_month:02d}月",
                                                style='Month.TButton',
-                                               command=self._open_monthly_data_dialog)
+                                               command=self._open_monthly_data)
         self.current_month_button.pack()
 
-        # メインの家計テーブルセクション（大きく）
-        tree_section = tk.Frame(main_container, bg=self.colors['bg_secondary'], relief='flat')
+        # メインテーブルセクション
+        tree_section = tk.Frame(main_container, bg=self.colors['bg_secondary'])
         tree_section.pack(fill=tk.BOTH, expand=True)
 
-        self._create_tree_if_needed(tree_section)
-        self._highlight_selected_month()
+        self._create_treeview(tree_section)
+        self._update_month_buttons()
 
-    def _create_tree_if_needed(self, parent):
-        """Treeviewを作成。"""
-        if self.tree is not None:
+    def _create_treeview(self, parent):
+        """
+        メインのTreeviewウィジェットを作成する。
+
+        月間の家計データを表形式で表示するための
+        Treeviewを作成し、各種イベントをバインドする。
+
+        Args:
+            parent: Treeviewを配置する親ウィジェット
+        """
+        if self.tree:
             return
 
         # 既存のウィジェットをクリア
         for widget in parent.winfo_children():
             widget.destroy()
 
-        # 列を結合（デフォルト + カスタム + ＋ボタン）
+        # 列の定義（デフォルト + カスタム + 追加ボタン）
         all_columns = self.default_columns + self.custom_columns + ["＋"]
 
-        # メインのツリービューフレーム（高さを明示的に設定）
-        main_tree_frame = tk.Frame(parent, bg='white', relief='solid', bd=1)
-        main_tree_frame.pack(fill=tk.BOTH, expand=True)
+        # Treeviewを格納するフレーム
+        tree_frame = tk.Frame(parent, bg='white', relief='solid', bd=1)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
 
-        # グリッドの重み設定
-        main_tree_frame.grid_rowconfigure(0, weight=1)
-        main_tree_frame.grid_columnconfigure(0, weight=1)
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
 
-        # Treeview（高さを明示的に指定）
-        self.tree = ttk.Treeview(main_tree_frame, columns=all_columns, show="headings", height=25)
+        # Treeviewの作成
+        self.tree = ttk.Treeview(tree_frame, columns=all_columns, show="headings", height=25)
         self.tree.grid(row=0, column=0, sticky="nsew")
 
-        # 各列の設定（境界線効果を強化）
+        # 各列の設定
         for i, col in enumerate(all_columns):
-            # ヘッダー設定
             self.tree.heading(col, text=col)
 
-            # 列設定（境界線効果のためのパディングと幅調整）
             if i == 0:  # 日付列
                 self.tree.column(col, anchor="center", width=60, minwidth=50)
-            elif col == "＋":  # ＋ボタン列
+            elif col == "＋":  # 追加ボタン列
                 self.tree.column(col, anchor="center", width=40, minwidth=40, stretch=False)
-            else:
+            else:  # データ列
                 self.tree.column(col, anchor="center", width=80, minwidth=60)
 
-        # 縦スクロールバー
-        v_scrollbar = ttk.Scrollbar(main_tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        # スクロールバー（縦）
+        v_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         v_scrollbar.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=v_scrollbar.set)
 
-        # 横スクロールバー
-        h_scrollbar = ttk.Scrollbar(main_tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        # スクロールバー（横）
+        h_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         h_scrollbar.grid(row=1, column=0, sticky="ew")
         self.tree.configure(xscrollcommand=h_scrollbar.set)
 
-        # スタイル設定（列の境界線を強化）
+        # Treeviewのスタイル設定
         style = ttk.Style()
-
-        # テーマを設定して境界線を表示
         style.theme_use('clam')
 
-        # Treeviewの基本スタイル（グリッド線効果）
         style.configure("Treeview",
                         fieldbackground="white",
                         background="white",
@@ -1757,178 +2100,395 @@ class YearApp:
                         borderwidth=1,
                         relief="solid")
 
-        # ヘッダーのスタイル（境界線強化）
         style.configure("Treeview.Heading",
                         background="#e8e8e8",
                         font=('Arial', 10, 'bold'),
                         relief="raised",
                         borderwidth=1)
 
-        # 選択時の色を調整
         style.map("Treeview",
                   background=[('selected', '#0078d4')],
                   foreground=[('selected', 'white')])
 
-        # 列セパレーターのスタイルを追加
-        style.configure("Treeview.Separator",
-                        background="#d0d0d0",
-                        borderwidth=1)
-
-        # タグ設定（背景色のみで区別）
-        self.tree.tag_configure("TOTAL",
-                                background="#fff3cd",
-                                font=('Arial', 10, 'bold'))
-
-        self.tree.tag_configure("SUMMARY",
-                                background="#d4edda",
-                                font=('Arial', 10, 'bold'))
-
-        # 通常行のタグ（白背景）
-        self.tree.tag_configure("normal_row",
-                                background="white")
-
-        # 奇数行用タグ（薄いグレー背景でグリッド効果）
-        self.tree.tag_configure("odd_row",
-                                background="#f8f9fa")
-
-        # 列の境界線効果を強化するためのバインド
-        self._setup_column_separators()
+        # 行のタグ設定（背景色による区別）
+        self.tree.tag_configure("TOTAL", background="#fff3cd", font=('Arial', 10, 'bold'))  # 合計行
+        self.tree.tag_configure("SUMMARY", background="#d4edda", font=('Arial', 10, 'bold'))  # まとめ行
+        self.tree.tag_configure("normal_row", background="white")  # 通常行（偶数）
+        self.tree.tag_configure("odd_row", background="#f8f9fa")  # 通常行（奇数）
 
         # イベントバインド
-        self.tree.bind("<Double-1>", self._on_parent_double_click)
-        self.tree.bind("<Button-1>", self._on_single_click)
-        self.tree.bind("<Button-3>", self._on_header_right_click)
+        self.tree.bind("<Double-1>", self._on_double_click)  # ダブルクリック
+        self.tree.bind("<Button-1>", self._on_single_click)  # シングルクリック
+        self.tree.bind("<Button-3>", self._on_right_click)  # 右クリック
+        self.tree.bind("<MouseWheel>", self._on_mousewheel)  # マウスホイール
+        self.tree.bind("<Shift-MouseWheel>", lambda e: self.tree.xview_scroll(int(-1 * (e.delta / 120)), "units"))
 
-        # 右クリックメニューの作成
+        # 右クリックメニュー（カスタム列用）
         self.column_context_menu = tk.Menu(self.root, tearoff=0)
         self.column_context_menu.add_command(label="列名を編集", command=self._edit_column_name)
         self.column_context_menu.add_separator()
         self.column_context_menu.add_command(label="列を削除", command=self._delete_column)
 
-        # マウスホイールでのスクロール
-        def on_mousewheel(event):
-            if event.state & 0x4:  # Ctrlキーが押されている場合は横スクロール
-                self.tree.xview_scroll(int(-1 * (event.delta / 120)), "units")
-            else:  # 通常は縦スクロール
-                self.tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        self.tree.bind("<MouseWheel>", on_mousewheel)
-        self.tree.bind("<Shift-MouseWheel>", lambda e: self.tree.xview_scroll(int(-1 * (e.delta / 120)), "units"))
-
-        # マウスホイールでのスクロール
-        def on_mousewheel(event):
-            if event.state & 0x4:  # Ctrlキーが押されている場合は横スクロール
-                self.tree.xview_scroll(int(-1 * (event.delta / 120)), "units")
-            else:  # 通常は縦スクロール
-                self.tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        self.tree.bind("<MouseWheel>", on_mousewheel)
-        self.tree.bind("<Shift-MouseWheel>", lambda e: self.tree.xview_scroll(int(-1 * (e.delta / 120)), "units"))
-
-        # ツールチップを初期化（この行を追加）
+        # ツールチップを初期化
         self.tooltip = TreeviewTooltip(self.tree, self)
 
-        print(f"Treeview作成完了 - 高さ: 25行, 列数: {len(all_columns)}")
+    def _on_mousewheel(self, event):
+        """
+        マウスホイールイベントを処理する。
 
-    def _setup_column_separators(self):
-        """列の境界線を設定する。"""
+        通常は縦スクロール、Ctrlキーを押しながらの場合は
+        横スクロールを行う。
+        """
+        if event.state & 0x4:  # Ctrlキーが押されている
+            self.tree.xview_scroll(int(-1 * (event.delta / 120)), "units")
+        else:
+            self.tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _prev_year(self):
+        """前年に移動する。"""
+        self.current_year -= 1
+        self.year_label.config(text=str(self.current_year))
+        self._show_month(self.current_month)
+
+    def _next_year(self):
+        """翌年に移動する。"""
+        self.current_year += 1
+        self.year_label.config(text=str(self.current_year))
+        self._show_month(self.current_month)
+
+    def _select_month(self, month):
+        """
+        指定された月を選択する。
+
+        Args:
+            month: 選択する月（1-12）
+        """
+        self.current_month = month
+        self.current_month_button.config(text=f"📅 {month:02d}月")
+        self._update_month_buttons()
+        self._show_month(month)
+
+    def _update_month_buttons(self):
+        """
+        月選択ボタンのハイライトを更新する。
+
+        現在選択されている月のボタンを強調表示する。
+        """
+        style = ttk.Style()
+        for i, btn in enumerate(self.month_buttons, start=1):
+            if i == self.current_month:
+                btn.configure(style='Selected.TButton')
+            else:
+                btn.configure(style='Modern.TButton')
+
+    def _open_monthly_data(self):
+        """月間データ詳細ダイアログを開く。"""
+        MonthlyDataDialog(self.root, self, self.current_year, self.current_month)
+
+    def _show_month(self, month):
+        """
+        指定された月のデータを表示する。
+
+        child_dataから該当月のデータを集計し、
+        Treeviewに表示する。合計行とまとめ行も追加する。
+
+        Args:
+            month: 表示する月（1-12）
+        """
+        if not self.tree:
+            return
+
+        # 既存の表示をクリア
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        all_columns = self.default_columns + self.custom_columns
+        days = self.get_days_in_month(month)
+
+        # 各日のデータを表示
+        for day in range(1, days + 1):
+            row_values = self._calculate_day_totals(day)
+            formatted_values = self._format_row_values(row_values)
+            formatted_values.append("")  # ＋ボタン列
+
+            # 奇数・偶数行で背景色を変える
+            tag = "odd_row" if day % 2 == 1 else "normal_row"
+            self.tree.insert("", "end", values=formatted_values, tags=(tag,))
+
+        # 合計行
+        total_row = [" 合計 "] + ["  "] * (len(all_columns) - 1) + [""]
+        self.tree.insert("", "end", values=total_row, tags=("TOTAL",))
+
+        # まとめ行（収入・支出の表示）
+        income_val = self._get_income_total()
+        inc_str = f" {income_val} " if income_val != 0 else "  "
+        summary_row = [" まとめ ", "  ", " 収入 ", inc_str, " 支出 ", "  "] + ["  "] * (len(all_columns) - 6) + [""]
+        self.tree.insert("", "end", values=summary_row, tags=("SUMMARY",))
+
+        # 合計とまとめ行の値を更新
+        self._update_totals()
+
+    def _calculate_day_totals(self, day):
+        """
+        特定の日の各項目の合計金額を計算する。
+
+        child_dataから該当日のデータを取得し、
+        各項目の合計を計算する。
+
+        Args:
+            day: 計算する日（1-31）
+
+        Returns:
+            list: 各列の合計値のリスト
+        """
+        all_columns = self.default_columns + self.custom_columns
+        totals = [""] * len(all_columns)
+        totals[0] = str(day)  # 日付列
+
+        # 各項目の合計を計算
+        for col_index in range(1, len(all_columns)):
+            dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_index}"
+            if dict_key in self.child_data:
+                data_list = self.child_data[dict_key]
+                # 金額列（インデックス1）を合計
+                total = sum(self._parse_amount(row[1]) for row in data_list if len(row) > 1)
+                if total != 0:
+                    totals[col_index] = str(total)
+
+        return totals
+
+    def _format_row_values(self, values):
+        """
+        行データを表示用にフォーマットする。
+
+        各セルの値にパディングを追加して、
+        見やすい表示にする。
+
+        Args:
+            values: フォーマット前の値のリスト
+
+        Returns:
+            list: フォーマット済みの値のリスト
+        """
+        formatted = []
+        for i, val in enumerate(values):
+            if i == 0:  # 日付列
+                formatted.append(f" {val} ")
+            else:
+                formatted.append(f" {val} " if val else "  ")
+        return formatted
+
+    def _get_income_total(self):
+        """
+        現在月の収入合計を取得する。
+
+        まとめ行（day=0）の収入列（col_index=3）から
+        収入の合計を計算する。
+
+        Returns:
+            int: 収入の合計金額
+        """
+        dict_key = f"{self.current_year}-{self.current_month}-0-3"
+        if dict_key in self.child_data:
+            data_list = self.child_data[dict_key]
+            return sum(self._parse_amount(row[1]) for row in data_list if len(row) > 1)
+        return 0
+
+    def _update_totals(self):
+        """
+        合計行とまとめ行の値を更新する。
+
+        表示されている各日のデータから月間合計を計算し、
+        合計行とまとめ行（収支差額、総支出）を更新する。
+        """
+        items = self.tree.get_children()
+        if len(items) < 2:
+            return
+
+        total_row_id = items[-2]  # 合計行
+        summary_row_id = items[-1]  # まとめ行
+        all_columns = self.default_columns + self.custom_columns
+        cols = len(all_columns)
+
+        # 各列の合計を計算
+        sums = [0] * (cols - 1)
+        for row_id in items[:-2]:  # 日付行のみ対象
+            row_vals = self.tree.item(row_id, 'values')
+            for i in range(1, cols):
+                try:
+                    val_str = str(row_vals[i]).strip() if i < len(row_vals) else ""
+                    sums[i - 1] += int(val_str) if val_str else 0
+                except (ValueError, TypeError, IndexError):
+                    pass
+
+        # 合計行を更新
+        total_vals = list(self.tree.item(total_row_id, 'values'))
+        for i in range(1, cols):
+            total_vals[i] = f" {sums[i - 1]} " if sums[i - 1] != 0 else "  "
+
+        while len(total_vals) <= cols:
+            total_vals.append("")
+        self.tree.item(total_row_id, values=total_vals)
+
+        # 総支出を計算
+        grand_total = sum(int(str(v).strip()) for v in total_vals[1:cols]
+                          if v and str(v).strip() and str(v).strip().isdigit())
+
+        # まとめ行を更新
+        summary_vals = list(self.tree.item(summary_row_id, 'values'))
         try:
-            # tkinterの内部スタイルを使用して列境界線を強化
-            style = ttk.Style()
+            income_str = str(summary_vals[3]).strip() if len(summary_vals) > 3 else ""
+            income_val = int(income_str) if income_str else 0
+        except:
+            income_val = 0
 
-            # カスタムスタイルの作成
-            style.element_create("Custom.Treeheading.border", "from", "default")
-            style.layout("Custom.Treeview.Heading", [
-                ("Custom.Treeheading.cell", {'sticky': 'nswe'}),
-                ("Custom.Treeheading.border", {'children': [
-                    ("Custom.Treeheading.padding", {'children': [
-                        ("Custom.Treeheading.text", {'sticky': 'we'})
-                    ]})
-                ], 'sticky': 'nswe'})
-            ])
+        # 収支差額と総支出を更新
+        balance = income_val - grand_total
+        summary_vals[1] = f" {balance} " if balance != 0 else "  "
+        summary_vals[5] = f" {grand_total} " if grand_total != 0 else "  "
 
-            # セルの境界線を強化
-            style.configure("Custom.Treeview.Heading",
-                            relief="solid",
-                            borderwidth=1,
-                            background="#e8e8e8")
+        while len(summary_vals) <= cols:
+            summary_vals.append("")
 
-            # TreeviewのセルにもCustomスタイルを適用
-            style.configure("Treeview.Cell",
-                            relief="solid",
-                            borderwidth=1)
+        self.tree.item(summary_row_id, values=summary_vals)
 
-        except Exception as e:
-            print(f"列セパレーター設定エラー: {e}")
-            # エラーが発生した場合は代替方法を使用
-            self._apply_alternative_grid_style()
+    def _on_single_click(self, event):
+        """
+        シングルクリックイベントを処理する。
 
-    def _apply_alternative_grid_style(self):
-        """代替のグリッドスタイルを適用。"""
+        ヘッダーの＋ボタンがクリックされた場合、
+        新しい列を追加する。
+        """
+        region = self.tree.identify_region(event.x, event.y)
+        if region == "heading":
+            col_id = self.tree.identify_column(event.x)
+            if col_id:
+                col_index = int(col_id[1:]) - 1
+                all_columns = self.default_columns + self.custom_columns
 
-        # Canvasを使用してグリッド線を描画する方法
-        def draw_grid_lines(event=None):
-            # この関数は描画後に呼び出される
+                if col_index == len(all_columns):  # ＋ボタン列
+                    self._add_column()
+
+    def _on_double_click(self, event):
+        """
+        ダブルクリックイベントを処理する。
+
+        セルがダブルクリックされた場合、該当する
+        取引詳細ダイアログを開く。
+        ヘッダーの場合は列の編集や追加を行う。
+        """
+        row_id = self.tree.identify_row(event.y)
+        col_id = self.tree.identify_column(event.x)
+
+        if not row_id or not col_id:
+            return
+
+        # ヘッダーのクリック処理
+        region = self.tree.identify_region(event.x, event.y)
+        if region == "heading":
+            col_index = int(col_id[1:]) - 1
+            all_columns = self.default_columns + self.custom_columns
+
+            if col_index == len(all_columns):  # ＋ボタン
+                self._add_column()
+            elif col_index >= len(self.default_columns):  # カスタム列
+                self._edit_column_name(col_index)
+            return
+
+        # 行の種類を判定
+        items = self.tree.get_children()
+        if len(items) < 2:
+            return
+
+        total_row_id = items[-2]
+        summary_row_id = items[-1]
+
+        # 合計行は編集不可
+        if row_id == total_row_id:
+            return
+
+        # まとめ行は収入列のみ編集可能
+        if row_id == summary_row_id and col_id != "#4":
+            return
+
+        # 日付列は編集不可
+        if col_id == "#1":
+            return
+
+        # ＋ボタン列は編集不可
+        col_index = int(col_id[1:]) - 1
+        all_columns = self.default_columns + self.custom_columns
+        if col_index >= len(all_columns):
+            return
+
+        # 行データを取得
+        row_vals = self.tree.item(row_id, 'values')
+        if not row_vals:
+            return
+
+        # 日付と列名を特定
+        if row_id == summary_row_id:
+            day = 0
+            col_index = 3  # 収入列
+            col_name = "収入"
+        else:
             try:
-                # TreeviewのCanvasウィジェットにアクセス
-                canvas = None
-                for child in self.tree.winfo_children():
-                    if isinstance(child, tk.Canvas):
-                        canvas = child
-                        break
+                day = int(row_vals[0])
+            except:
+                return
+            col_name = self.tree.heading(col_id, "text")
 
-                if canvas:
-                    # 垂直線を描画
-                    canvas_width = canvas.winfo_width()
-                    canvas_height = canvas.winfo_height()
+        # 取引詳細ダイアログを開く
+        dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_index}"
+        TransactionDialog(self.root, self, dict_key, col_name)
 
-                    # 列の境界位置を計算
-                    col_positions = []
-                    x_pos = 0
-                    for col in self.tree['columns']:
-                        col_width = self.tree.column(col, 'width')
-                        x_pos += col_width
-                        col_positions.append(x_pos)
+    def _on_right_click(self, event):
+        """
+        右クリックイベントを処理する。
 
-                    # 垂直線を描画
-                    for x in col_positions[:-1]:  # 最後の線は除く
-                        if x < canvas_width:
-                            canvas.create_line(x, 0, x, canvas_height,
-                                               fill="#d0d0d0", width=1, tags="grid_line")
+        カスタム列のヘッダーで右クリックされた場合、
+        編集・削除メニューを表示する。
+        """
+        region = self.tree.identify_region(event.x, event.y)
+        if region != "heading":
+            return
 
-            except Exception as e:
-                print(f"グリッド線描画エラー: {e}")
+        col_id = self.tree.identify_column(event.x)
+        if not col_id:
+            return
 
-        # 描画イベントをバインド
-        self.tree.bind('<Configure>', draw_grid_lines)
-        self.tree.bind('<Map>', draw_grid_lines)
+        col_index = int(col_id[1:]) - 1
+        all_columns = self.default_columns + self.custom_columns
+
+        # カスタム列のみ編集・削除可能
+        if col_index >= len(all_columns) or col_index == 0 or col_index < len(self.default_columns):
+            return
+
+        self.selected_column_index = col_index
+        self.column_context_menu.post(event.x_root, event.y_root)
 
     def _add_column(self):
-        """新しい列を追加する。"""
-        # ダイアログを親ウィンドウの中央に表示
+        """
+        新しい列を追加する。
+
+        ダイアログを表示して列名を入力し、
+        カスタム列として追加する。
+        """
         dialog = tk.Toplevel(self.root)
         dialog.title("列の追加")
         dialog.resizable(False, False)
 
-        # ダイアログのサイズ
+        # ダイアログを中央に配置
         dialog_width = 300
         dialog_height = 120
 
-        # 親ウィンドウの位置とサイズを取得
-        parent_x = self.root.winfo_x()
-        parent_y = self.root.winfo_y()
-        parent_width = self.root.winfo_width()
-        parent_height = self.root.winfo_height()
-
-        # ダイアログを親ウィンドウの中央に配置
-        x = parent_x + (parent_width - dialog_width) // 2
-        y = parent_y + (parent_height - dialog_height) // 2
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_width) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_height) // 2
 
         dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
         dialog.transient(self.root)
         dialog.grab_set()
 
-        # ウィジェットの作成
         tk.Label(dialog, text="新しい列名を入力してください：", font=('Arial', 11)).pack(pady=10)
 
         entry = tk.Entry(dialog, font=('Arial', 11), width=25)
@@ -1941,333 +2501,43 @@ class YearApp:
         def on_ok():
             column_name = entry.get().strip()
             if column_name:
-                all_existing = self.default_columns + self.custom_columns
-                if column_name not in all_existing:
+                all_columns = self.default_columns + self.custom_columns
+                if column_name not in all_columns:
                     self.custom_columns.append(column_name)
-                    print(f"新しい列を追加: {column_name}")
                     dialog.destroy()
-                    self._recreate_tree()
-                    self._show_month_sheet(self.current_month)
+                    self._recreate_treeview()
+                    self._show_month(self.current_month)
                 else:
                     messagebox.showwarning("警告", "その列名は既に存在します。", parent=dialog)
             else:
                 messagebox.showwarning("警告", "列名を入力してください。", parent=dialog)
 
-        def on_cancel():
-            dialog.destroy()
-
         tk.Button(button_frame, text="OK", command=on_ok, width=8).pack(side=tk.LEFT, padx=5)
-        tk.Button(button_frame, text="キャンセル", command=on_cancel, width=8).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="キャンセル", command=dialog.destroy, width=8).pack(side=tk.LEFT, padx=5)
 
-        # Enterキーでも確定できるように
         entry.bind('<Return>', lambda e: on_ok())
-        dialog.bind('<Escape>', lambda e: on_cancel())
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
 
-    def _recreate_tree(self):
-        """Treeviewを再作成する。"""
+    def _recreate_treeview(self):
+        """
+        Treeviewを再作成する。
+
+        列の追加・削除・編集後に、Treeviewを
+        新しい列構成で再作成する。
+        """
         if self.tree:
-            # 現在のツリーの親を取得
             tree_parent = self.tree.master
             self.tree.destroy()
             self.tree = None
-
-            # 同じ親に新しいツリーを作成
-            self._create_tree_if_needed(tree_parent)
-            return
-
-        # 見つからない場合は、メインコンテナを再作成
-        print("ツリービューコンテナが見つかりません。メインレイアウトを再作成します。")
-
-    def _increase_year(self):
-        """年を増やす。"""
-        self.current_year += 1
-        self.year_label.config(text=str(self.current_year))
-        self._show_month_sheet(self.current_month)
-
-    def _decrease_year(self):
-        """年を減らす。"""
-        self.current_year -= 1
-        self.year_label.config(text=str(self.current_year))
-        self._show_month_sheet(self.current_month)
-
-    def _select_month(self, month):
-        """月を選択する。"""
-        self.current_month = month
-        self.current_month_button.config(text=f"📅 {month:02d}月")
-        self._highlight_selected_month()
-        self._show_month_sheet(month)
-
-    def _highlight_selected_month(self):
-        """選択中の月ボタンをハイライト。"""
-        for i, btn in enumerate(self.month_buttons, start=1):
-            if i == self.current_month:
-                btn.configure(style='Selected.TButton')
-            else:
-                btn.configure(style='TButton')
-
-        # 選択されたボタンのスタイルを設定
-        style = ttk.Style()
-        style.configure('Selected.TButton',
-                        background='#2196f3',
-                        foreground='white',
-                        font=('Arial', 10, 'bold'))
-        style.map('Selected.TButton',
-                  background=[('active', '#1976d2')])
-        style.configure('TButton', font=('Arial', 10))
-
-    def _show_month_sheet(self, month):
-        """月のシートを表示。"""
-        if not self.tree:
-            return
-
-        # 既存の行を削除
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-
-        all_columns = self.default_columns + self.custom_columns
-        cols = len(all_columns)
-        days = self._get_days_in_month(month)
-
-        # 日付行を挿入
-        for day in range(1, days + 1):
-            key_day = f"{self.current_year}-{month}-{day}"
-            if key_day in self.parent_table_data:
-                row_values = self.parent_table_data[key_day]
-                while len(row_values) < cols:
-                    row_values.append("")
-            else:
-                row_values = [str(day)] + [""] * (cols - 1)
-
-            # セルの値をフォーマット（パディング追加）- ここで直接実装
-            formatted_values = []
-            for i, val in enumerate(row_values):
-                if i == 0:  # 日付列
-                    formatted_values.append(f" {val} ")
-                else:
-                    formatted_values.append(f" {val} " if val else "  ")
-
-            # ＋ボタン列は空のまま
-            formatted_values.append("")
-
-            # 奇数・偶数行でタグを分ける
-            tag = "odd_row" if day % 2 == 1 else "normal_row"
-            self.tree.insert("", "end", values=formatted_values, tags=(tag,))
-
-        # 合計行
-        total_row = [" 合計 "] + ["  "] * (cols - 1) + [""]
-        self.tree.insert("", "end", values=total_row, tags=("TOTAL",))
-
-        # まとめ行
-        summary_key = f"{self.current_year}-{month}-0"
-        if summary_key in self.parent_table_data:
-            sm_data = self.parent_table_data[summary_key]
-            inc_str = f" {sm_data[3]} " if len(sm_data) > 3 and sm_data[3] else "  "
-        else:
-            inc_str = "  "
-
-        summary_row = [" まとめ ", "  ", " 収入 ", inc_str, " 支出 ", "  "] + ["  "] * (cols - 6) + [""]
-        self.tree.insert("", "end", values=summary_row, tags=("SUMMARY",))
-
-        self._recalc_total_and_summary()
-
-    def _setup_enhanced_grid_style(self):
-        """強化されたグリッド線スタイルを設定（オプション）"""
-        style = ttk.Style()
-
-        # テーマをカスタマイズしてよりグリッド線らしく見せる
-        style.theme_use('clam')
-
-        # Treeviewのセル間隔を調整
-        style.configure("Treeview",
-                        fieldbackground="white",
-                        background="white",
-                        rowheight=28,
-                        font=('Arial', 9),
-                        borderwidth=1,
-                        insertwidth=1)
-
-        # より明確な境界線効果のための色設定
-        self.tree.tag_configure("even_row", background="#ffffff")
-        self.tree.tag_configure("odd_row", background="#f8f9fa")
-        self.tree.tag_configure("separator", background="#dee2e6")  # より濃いグレー
-
-    def _recalc_total_and_summary(self):
-        """合計行とまとめ行を再計算。"""
-        items = self.tree.get_children()
-        if len(items) < 2:
-            return
-
-        total_row_id = items[-2]
-        summary_row_id = items[-1]
-        all_columns = self.default_columns + self.custom_columns
-        cols = len(all_columns)
-
-        # 合計行の計算
-        sums = [0] * (cols - 1)
-        for row_id in items[:-2]:
-            row_vals = self.tree.item(row_id, 'values')
-            for i in range(1, cols):
-                try:
-                    # パディングを除去して数値に変換
-                    val_str = str(row_vals[i]).strip() if i < len(row_vals) else ""
-                    val = int(val_str) if val_str else 0
-                except (ValueError, TypeError, IndexError):
-                    val = 0
-                sums[i - 1] += val
-
-        # 合計行を更新（パディング付き）
-        total_vals = list(self.tree.item(total_row_id, 'values'))
-        for i in range(1, cols):
-            if sums[i - 1] == 0:
-                total_vals[i] = "  "  # 空の場合はパディングのみ
-            else:
-                total_vals[i] = f" {sums[i - 1]} "  # 値をパディング
-
-        while len(total_vals) <= cols:
-            total_vals.append("")
-        self.tree.item(total_row_id, values=total_vals)
-
-        # 総支出計算
-        grand_total = 0
-        for v in total_vals[1:cols]:
-            if v and str(v).strip():
-                try:
-                    grand_total += int(str(v).strip())
-                except:
-                    pass
-
-        # まとめ行更新（パディング付き）
-        summary_vals = list(self.tree.item(summary_row_id, 'values'))
-        try:
-            income_str = str(summary_vals[3]).strip() if len(summary_vals) > 3 else ""
-            income_val = int(income_str) if income_str else 0
-        except:
-            income_val = 0
-
-        sum_val = income_val - grand_total
-        if sum_val == 0:
-            summary_vals[1] = "  "
-        else:
-            summary_vals[1] = f" {sum_val} "
-
-        if grand_total == 0:
-            summary_vals[5] = "  "
-        else:
-            summary_vals[5] = f" {grand_total} "
-
-        while len(summary_vals) <= cols:
-            summary_vals.append("")
-
-        self.tree.item(summary_row_id, values=summary_vals)
-
-    def _on_single_click(self, event):
-        """シングルクリックの処理（＋ボタン用）。"""
-        region = self.tree.identify_region(event.x, event.y)
-        if region == "heading":
-            col_id = self.tree.identify_column(event.x)
-            if col_id:
-                col_index = int(col_id[1:]) - 1
-                all_columns = self.default_columns + self.custom_columns
-
-                # ＋ボタン列のクリック
-                if col_index == len(all_columns):
-                    self._add_column()
-
-    def _on_parent_double_click(self, event):
-        """親ダイアログのダブルクリック処理。"""
-        row_id = self.tree.identify_row(event.y)
-        col_id = self.tree.identify_column(event.x)
-        if not row_id or not col_id:
-            return
-
-        # ヘッダー部分のクリックかチェック
-        region = self.tree.identify_region(event.x, event.y)
-        if region == "heading":
-            # ヘッダークリックの処理
-            col_index = int(col_id[1:]) - 1
-            all_columns = self.default_columns + self.custom_columns
-
-            if col_index == len(all_columns):  # ＋ボタン列
-                self._add_column()
-                return
-            elif col_index >= len(self.default_columns):  # カスタム列
-                self._edit_column_name(col_index)
-                return
-            else:
-                return  # デフォルト列は編集不可
-
-        items = self.tree.get_children()
-        if len(items) < 2:
-            return
-
-        total_row_id = items[-2]
-        summary_row_id = items[-1]
-
-        # 合計行は編集不可
-        if row_id == total_row_id:
-            return
-
-        # まとめ行は収入金額のみ編集可
-        if row_id == summary_row_id:
-            if col_id != "#4":
-                return
-
-        # 日付列は編集不可
-        if col_id == "#1":
-            return
-
-        # ＋ボタン列は編集不可
-        col_index = int(col_id[1:]) - 1
-        all_columns = self.default_columns + self.custom_columns
-        if col_index >= len(all_columns):
-            return
-
-        row_vals = self.tree.item(row_id, 'values')
-        if not row_vals:
-            return
-
-        if row_id == summary_row_id:
-            day = 0
-            # まとめ行の場合、収入は列インデックス3（0ベース）
-            col_index = 3
-            col_name = "収入"
-        else:
-            try:
-                day = int(row_vals[0])
-            except:
-                day = 0
-            col_name = self.tree.heading(col_id, "text")
-
-        dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_index}"
-
-        print(f"ダブルクリック - キー: {dict_key}, 列名: {col_name}")
-        print(f"現在の child_data: {self.child_data}")
-
-        ChildDialog(self.root, self, dict_key, col_name)
-
-    def _on_header_right_click(self, event):
-        """ヘッダーの右クリック処理。"""
-        region = self.tree.identify_region(event.x, event.y)
-        if region != "heading":
-            return
-
-        col_id = self.tree.identify_column(event.x)
-        if not col_id:
-            return
-
-        col_index = int(col_id[1:]) - 1
-        all_columns = self.default_columns + self.custom_columns
-
-        # ＋ボタン列や日付列、デフォルト列は右クリック無効
-        if col_index >= len(all_columns) or col_index == 0 or col_index < len(self.default_columns):
-            return
-
-        # カスタム列のみ右クリック可能
-        self.selected_column_index = col_index
-        self.column_context_menu.post(event.x_root, event.y_root)
+            self._create_treeview(tree_parent)
 
     def _edit_column_name(self, col_index=None):
-        """列名を編集。"""
+        """
+        カスタム列の名前を編集する。
+
+        Args:
+            col_index: 編集する列のインデックス
+        """
         if col_index is None:
             col_index = getattr(self, 'selected_column_index', None)
 
@@ -2280,30 +2550,22 @@ class YearApp:
 
         old_name = self.custom_columns[custom_index]
 
-        # ダイアログを親ウィンドウの中央に表示
+        # 編集ダイアログを表示
         dialog = tk.Toplevel(self.root)
         dialog.title("列名の編集")
         dialog.resizable(False, False)
 
-        # ダイアログのサイズ
+        # ダイアログを中央に配置
         dialog_width = 300
         dialog_height = 120
 
-        # 親ウィンドウの位置とサイズを取得
-        parent_x = self.root.winfo_x()
-        parent_y = self.root.winfo_y()
-        parent_width = self.root.winfo_width()
-        parent_height = self.root.winfo_height()
-
-        # ダイアログを親ウィンドウの中央に配置
-        x = parent_x + (parent_width - dialog_width) // 2
-        y = parent_y + (parent_height - dialog_height) // 2
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_width) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_height) // 2
 
         dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
         dialog.transient(self.root)
         dialog.grab_set()
 
-        # ウィジェットの作成
         tk.Label(dialog, text="新しい列名を入力してください：", font=('Arial', 11)).pack(pady=10)
 
         entry = tk.Entry(dialog, font=('Arial', 11), width=25)
@@ -2318,30 +2580,30 @@ class YearApp:
         def on_ok():
             new_name = entry.get().strip()
             if new_name and new_name != old_name:
-                # 重複チェック
                 all_columns = self.default_columns + self.custom_columns
                 if new_name not in all_columns:
                     self.custom_columns[custom_index] = new_name
                     dialog.destroy()
-                    self._recreate_tree()
-                    self._show_month_sheet(self.current_month)
+                    self._recreate_treeview()
+                    self._show_month(self.current_month)
                 else:
                     messagebox.showwarning("警告", "その列名は既に存在します。", parent=dialog)
             else:
                 dialog.destroy()
 
-        def on_cancel():
-            dialog.destroy()
-
         tk.Button(button_frame, text="OK", command=on_ok, width=8).pack(side=tk.LEFT, padx=5)
-        tk.Button(button_frame, text="キャンセル", command=on_cancel, width=8).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="キャンセル", command=dialog.destroy, width=8).pack(side=tk.LEFT, padx=5)
 
-        # Enterキーでも確定できるように
         entry.bind('<Return>', lambda e: on_ok())
-        dialog.bind('<Escape>', lambda e: on_cancel())
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
 
     def _delete_column(self):
-        """列を削除。"""
+        """
+        カスタム列を削除する。
+
+        選択された列とその列に関連するすべてのデータを削除する。
+        削除前に確認ダイアログを表示する。
+        """
         col_index = getattr(self, 'selected_column_index', None)
         if col_index is None or col_index < len(self.default_columns):
             return
@@ -2351,136 +2613,70 @@ class YearApp:
             return
 
         col_name = self.custom_columns[custom_index]
-        result = messagebox.askyesno("確認", f"列 '{col_name}' を削除しますか？\n※この列のデータもすべて削除されます。")
 
-        if result:
-            # 列を削除
-            deleted_col_name = self.custom_columns.pop(custom_index)
+        # 削除確認ダイアログ
+        if messagebox.askyesno("確認", f"列 '{col_name}' を削除しますか？\n※この列のデータもすべて削除されます。"):
+            # 列をリストから削除
+            self.custom_columns.pop(custom_index)
 
-            # 関連するデータも削除
-            keys_to_delete = []
-            for key in list(self.child_data.keys()):
-                parts = key.split("-")
-                if len(parts) == 4 and int(parts[3]) == col_index:
-                    keys_to_delete.append(key)
+            # 関連するデータを削除
+            # child_dataから該当列のデータを持つキーを特定
+            keys_to_delete = [key for key in self.child_data.keys()
+                              if key.split("-")[3] == str(col_index)]
 
+            # データを削除
             for key in keys_to_delete:
                 del self.child_data[key]
 
-            print(f"列 '{deleted_col_name}' を削除しました")
-            self._recreate_tree()
-            self._show_month_sheet(self.current_month)
-
-    def _calculate_day_totals(self, year, month, day):
-        """特定の日の各列の合計を計算する。"""
-        all_columns = self.default_columns + self.custom_columns
-        totals = [""] * len(all_columns)
-        totals[0] = str(day)  # 日付列
-
-        for col_index in range(1, len(all_columns)):
-            dict_key = f"{year}-{month}-{day}-{col_index}"
-            if dict_key in self.child_data:
-                data_list = self.child_data[dict_key]
-                total = 0
-                for row in data_list:
-                    if len(row) > 1:  # 金額は2番目の要素
-                        try:
-                            amount_str = str(row[1]).replace(',', '').replace('¥', '').strip()
-                            if amount_str:
-                                total += int(amount_str)
-                        except ValueError:
-                            pass
-                if total != 0:
-                    totals[col_index] = str(total)
-
-        return totals
-
-    def _show_month_sheet(self, month):
-        """月のシートを表示（child_dataから計算）。"""
-        if not self.tree:
-            return
-
-        # 既存の行を削除
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-
-        all_columns = self.default_columns + self.custom_columns
-        days = self._get_days_in_month(month)
-
-        # 日付行を挿入（child_dataから計算）
-        for day in range(1, days + 1):
-            row_values = self._calculate_day_totals(self.current_year, month, day)
-
-            # セルの値をフォーマット（パディング追加）
-            formatted_values = []
-            for i, val in enumerate(row_values):
-                if i == 0:  # 日付列
-                    formatted_values.append(f" {val} ")
-                else:
-                    formatted_values.append(f" {val} " if val else "  ")
-
-            # ＋ボタン列は空のまま
-            formatted_values.append("")
-
-            # 奇数・偶数行でタグを分ける
-            tag = "odd_row" if day % 2 == 1 else "normal_row"
-            self.tree.insert("", "end", values=formatted_values, tags=(tag,))
-
-        # 合計行
-        total_row = [" 合計 "] + ["  "] * (len(all_columns) - 1) + [""]
-        self.tree.insert("", "end", values=total_row, tags=("TOTAL",))
-
-        # まとめ行（収入データの取得）
-        summary_key = f"{self.current_year}-{month}-0-3"  # まとめ行の収入は列3
-        income_val = 0
-        if summary_key in self.child_data:
-            data_list = self.child_data[summary_key]
-            for row in data_list:
-                if len(row) > 1:
-                    try:
-                        income_str = str(row[1]).replace(',', '').replace('¥', '').strip()
-                        if income_str:
-                            income_val += int(income_str)
-                    except ValueError:
-                        pass
-
-        inc_str = f" {income_val} " if income_val != 0 else "  "
-        summary_row = [" まとめ ", "  ", " 収入 ", inc_str, " 支出 ", "  "] + ["  "] * (len(all_columns) - 6) + [""]
-        self.tree.insert("", "end", values=summary_row, tags=("SUMMARY",))
-
-        self._recalc_total_and_summary()
+            # Treeviewを再作成して変更を反映
+            self._recreate_treeview()
+            self._show_month(self.current_month)
 
     def update_parent_cell(self, dict_key_day, col_index, new_value):
-        """親セルの値を更新（画面のみ更新、データはchild_dataに保存済み）。"""
+        """
+        親画面のセル表示を更新する。
+
+        取引詳細ダイアログから呼ばれ、合計金額を
+        メイン画面のTreeviewに反映する。
+
+        Args:
+            dict_key_day: 日付キー（年-月-日）
+            col_index: 列インデックス
+            new_value: 新しい値（合計金額または空文字）
+        """
+        # キーから年月日を抽出
         y, mo, d = dict_key_day.split("-")
         y, mo, d = int(y), int(mo), int(d)
 
+        # 現在表示中の年月と一致する場合のみ更新
         if (self.current_year == y) and (self.current_month == mo):
             items = self.tree.get_children()
             if len(items) < 2:
                 return
 
-            summary_row_id = items[-1]
+            summary_row_id = items[-1]  # まとめ行
 
-            found = False
-            for row_id in items[:-2]:
+            # 該当する日付の行を検索
+            for row_id in items[:-2]:  # 日付行のみ対象
                 row_vals = list(self.tree.item(row_id, 'values'))
                 if row_vals and str(row_vals[0]).strip() == str(d):
+                    # 列数を確認して必要に応じて拡張
                     all_columns = self.default_columns + self.custom_columns
                     while len(row_vals) < len(all_columns) + 1:
                         row_vals.append("")
 
-                    # 空文字列または0の場合は空表示（パディング付き）
+                    # 表示値をフォーマット（パディング付き）
                     display_value = "  "
                     if new_value and str(new_value).strip() != "" and str(new_value) != "0":
                         display_value = f" {new_value} "
 
+                    # 値を更新
                     row_vals[col_index] = display_value
                     self.tree.item(row_id, values=row_vals)
-                    found = True
                     break
 
-            if not found and d == 0:
+            # まとめ行（収入）の更新
+            if d == 0:
                 sum_vals = list(self.tree.item(summary_row_id, 'values'))
                 all_columns = self.default_columns + self.custom_columns
                 while len(sum_vals) < len(all_columns) + 1:
@@ -2493,465 +2689,71 @@ class YearApp:
                 sum_vals[col_index] = display_value
                 self.tree.item(summary_row_id, values=sum_vals)
 
-            self._recalc_total_and_summary()
+            # 合計とまとめ行を再計算
+            self._update_totals()
 
-    def _get_days_in_month(self, month):
-        """月の日数を取得。"""
+    def get_days_in_month(self, month):
+        """
+        指定された月の日数を取得する。
+
+        うるう年を考慮して正確な日数を返す。
+
+        Args:
+            month: 月（1-12）
+
+        Returns:
+            int: その月の日数
+        """
         if month in [1, 3, 5, 7, 8, 10, 12]:
             return 31
         elif month in [4, 6, 9, 11]:
             return 30
         elif month == 2:
             y = self.current_year
-            if (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0):
-                return 29
-            else:
-                return 28
+            # うるう年の判定
+            return 29 if (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0) else 28
         return 30
 
-class ChildDialog(tk.Toplevel):
-    def __init__(self, parent, parent_app, dict_key, col_name):
-        """子ダイアログの初期化。"""
-        super().__init__(parent)
-        self.parent_app = parent_app
-        self.dict_key = dict_key
-        self.col_name = col_name
+    def _parse_amount(self, amount_str):
+        """
+        金額文字列を整数に変換する。
 
-        print(f"ChildDialog初期化 - キー: {dict_key}")
-        print(f"利用可能なchild_dataキー: {list(parent_app.child_data.keys())}")
+        カンマや円記号を除去し、数値に変換する。
+        変換できない場合は0を返す。
 
-        # ダイアログの設定
-        dialog_width = 700
-        dialog_height = 500
-        min_width = 500
-        min_height = 350
+        Args:
+            amount_str: 金額を表す文字列
 
-        # 親ウィンドウの中央に配置
-        parent_x = self.master.winfo_x()
-        parent_y = self.master.winfo_y()
-        parent_w = self.master.winfo_width()
-        parent_h = self.master.winfo_height()
-
-        x = parent_x + (parent_w - dialog_width) // 2
-        y = parent_y + (parent_h - dialog_height) // 2
-
-        # 画面外に出ないように調整
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-
-        if x + dialog_width > screen_width:
-            x = screen_width - dialog_width - 20
-        if x < 0:
-            x = 20
-        if y + dialog_height > screen_height:
-            y = screen_height - dialog_height - 50
-        if y < 0:
-            y = 20
-
-        self.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
-        self.minsize(min_width, min_height)  # 最小サイズを設定
-        self.title(f"支出・収入詳細 - {col_name}")
-        self.configure(bg='#f0f0f0')
-
-        # モーダルに設定
-        self.transient(parent)
-        self.grab_set()
-
-        # リサイズ可能に設定
-        self.resizable(True, True)
-
-        # キー解析
-        parts = dict_key.split("-")
-        print(f"キー分割結果: {parts}")
-        if len(parts) == 4:
-            self.year = int(parts[0])
-            self.month = int(parts[1])
-            self.day = int(parts[2])
-            self.col_index = int(parts[3])
-        else:
-            self.year, self.month, self.day, self.col_index = (0, 0, 0, 0)
-
-        print(f"解析結果 - 年:{self.year}, 月:{self.month}, 日:{self.day}, 列:{self.col_index}")
-
-        self.child_tree = None
-        self.entry_editor = None
-        self.context_menu = None
-
-        self._create_widgets()
-
-    def _create_widgets(self):
-        """ウィジェットを作成。"""
-        # グリッドの重み設定（リサイズ対応）
-        self.grid_rowconfigure(1, weight=1)  # 修正: ツリービューエリアの行を1に変更
-        self.grid_columnconfigure(0, weight=1)
-
-        # タイトル
-        title_label = tk.Label(self, text=f"{self.col_name} の詳細入力",
-                               font=('Arial', 16, 'bold'), bg='#f0f0f0')
-        title_label.grid(row=0, column=0, pady=(10, 15), sticky="ew")
-
-        # ツリービューコンテナ（修正: スクロールバー重複を解決）
-        tree_container = tk.Frame(self, bg='#f0f0f0')
-        tree_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        tree_container.grid_rowconfigure(0, weight=1)
-        tree_container.grid_columnconfigure(0, weight=1)
-
-        # ツリービューとスクロールバー
-        columns = ["取引先", "金額", "詳細"]
-        self.child_tree = ttk.Treeview(tree_container, columns=columns, show="headings")
-
-        for col in columns:
-            self.child_tree.heading(col, text=col)
-            if col == "取引先":
-                self.child_tree.column(col, anchor="center", width=150, minwidth=100)
-            elif col == "金額":
-                self.child_tree.column(col, anchor="center", width=100, minwidth=80)
-            else:
-                self.child_tree.column(col, anchor="center", width=200, minwidth=150)
-
-        # ツリービューを配置
-        self.child_tree.grid(row=0, column=0, sticky="nsew")
-
-        # ツリービュー用スクロールバー（縦のみ）
-        tree_scrollbar = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.child_tree.yview)
-        tree_scrollbar.grid(row=0, column=1, sticky="ns")
-        self.child_tree.configure(yscrollcommand=tree_scrollbar.set)
-
-        # イベントバインド
-        self.child_tree.bind("<Double-1>", self._on_double_click)
-        self.child_tree.bind("<Button-3>", self._on_right_click)  # 右クリック
-
-        # ボタンフレーム（修正: 行番号を2に変更）
-        button_frame = tk.Frame(self, bg='#f0f0f0')
-        button_frame.grid(row=2, column=0, sticky="ew", pady=(15, 10), padx=10)
-
-        # 行追加ボタン
-        add_btn = tk.Button(button_frame, text="行を追加", font=('Arial', 12),
-                            bg='#4caf50', fg='white', relief='raised', bd=2,
-                            activebackground='#45a049', command=self._add_row)
-        add_btn.pack(side=tk.LEFT, padx=(0, 10), ipady=5)
-
-        # 右側ボタングループ
-        right_button_frame = tk.Frame(button_frame, bg='#f0f0f0')
-        right_button_frame.pack(side=tk.RIGHT)
-
-        # キャンセルボタン
-        cancel_btn = tk.Button(right_button_frame, text="キャンセル", font=('Arial', 12),
-                               bg='#f44336', fg='white', relief='raised', bd=2,
-                               activebackground='#d32f2f', command=self.destroy)
-        cancel_btn.pack(side=tk.RIGHT, padx=(10, 0), ipady=5)
-
-        # OKボタン
-        ok_btn = tk.Button(right_button_frame, text="OK", font=('Arial', 12, 'bold'),
-                           bg='#2196f3', fg='white', relief='raised', bd=2,
-                           activebackground='#1976d2', command=self._on_ok_button)
-        ok_btn.pack(side=tk.RIGHT, ipady=5)
-
-        # 右クリックメニュー
-        self.context_menu = tk.Menu(self, tearoff=0)
-        self.context_menu.add_command(label="行を削除", command=self._delete_row)
-
-        # 使用方法のヒント
-        hint_label = tk.Label(self,
-                              text="使い方: セルをダブルクリックで編集、右クリックで行削除",
-                              font=('Arial', 10), fg='#666666', bg='#f0f0f0')
-        hint_label.grid(row=3, column=0, pady=(5, 10))
-
-        # キーボードショートカット
-        self.bind('<Return>', lambda e: self._on_ok_button())
-        self.bind('<Escape>', lambda e: self.destroy())
-
-        # マウスホイールでスクロール
-        def on_mousewheel(event):
-            self.child_tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        self.child_tree.bind("<MouseWheel>", on_mousewheel)
-
-        # ツリービューの最小高さを設定
-        style = ttk.Style()
-        style.configure("Treeview", rowheight=25)
-
-        # 初期フォーカスをツリービューに
-        self.after(100, lambda: self.child_tree.focus_set())
-
-        # ウィジェット作成後にデータを読み込み
-        self.after(50, self._populate_data)
-
-        # 強制的にウィンドウを前面に表示
-        self.lift()
-        self.focus_force()
-
-    def _populate_data(self):
-        """データを表示。"""
-        if not self.child_tree:
-            print(f"警告: child_treeが初期化されていません")
-            return
-
-        # 既存のデータをクリア
-        for item in self.child_tree.get_children():
-            self.child_tree.delete(item)
-
-        data_list = self.parent_app.child_data.get(self.dict_key, [])
-        print(f"データ読み込み - キー: {self.dict_key}, データ数: {len(data_list)}")
-
-        if not data_list:
-            # データがない場合は空行を1つ追加
-            print("データが空のため、空行を追加します")
-            self.child_tree.insert("", "end", values=["", "", ""])
-        else:
-            # データがある場合は全て表示
-            for i, row in enumerate(data_list):
-                # 3要素未満の場合は空文字で埋める
-                row_data = list(row) if row else ["", "", ""]
-                while len(row_data) < 3:
-                    row_data.append("")
-                print(f"行{i}: {row_data}")
-                self.child_tree.insert("", "end", values=row_data)
-
-            # 最後に空行を追加（新規入力用）
-            self.child_tree.insert("", "end", values=["", "", ""])
-
-        print(f"表示完了 - 総行数: {len(self.child_tree.get_children())}")
-
-    def _add_row(self):
-        """空行を追加。"""
-        print("空行を追加します")
-        if self.child_tree:
-            item_id = self.child_tree.insert("", "end", values=["", "", ""])
-            print(f"追加された行ID: {item_id}")
-            # 追加した行を選択状態にする
-            self.child_tree.selection_set(item_id)
-            self.child_tree.see(item_id)
-        else:
-            print("エラー: child_treeが存在しません")
-
-    def _on_double_click(self, event):
-        """セルのダブルクリック編集。"""
-        # 編集中のエディターがあれば先に保存
-        if self.entry_editor:
-            self._cancel_edit()
-
-        item_id = self.child_tree.identify_row(event.y)
-        col_id = self.child_tree.identify_column(event.x)
-        print(f"ダブルクリック - 行ID: {item_id}, 列ID: {col_id}")
-
-        if not item_id or not col_id:
-            print("行IDまたは列IDが無効です")
-            return
-
-        # Treeviewの相対座標でbboxを取得
-        bbox = self.child_tree.bbox(item_id, col_id)
-        print(f"bbox: {bbox}")
-        if not bbox:
-            print("bboxが取得できませんでした")
-            return
-
-        col_idx = int(col_id[1:]) - 1
-        old_vals = list(self.child_tree.item(item_id, 'values'))
-        print(f"現在の値: {old_vals}, 編集列インデックス: {col_idx}")
-
-        # 値が足りない場合は空文字で埋める
-        while len(old_vals) <= col_idx:
-            old_vals.append("")
-
-        x, y, w, h = bbox
-        print(f"エディター配置位置: x={x}, y={y}, w={w}, h={h}")
-
-        # 取引先列の場合はコンボボックス、それ以外はEntry
-        if col_idx == 0:  # 取引先列
-            print("取引先列 - コンボボックスを作成")
-            self.entry_editor = ttk.Combobox(self.child_tree, font=("Arial", 11))
-            # 取引先履歴をセット
-            partner_list = sorted(list(self.parent_app.transaction_partners))
-            self.entry_editor['values'] = partner_list
-            self.entry_editor.set(old_vals[col_idx])
-        else:
-            print(f"通常列({col_idx}) - Entryを作成")
-            self.entry_editor = tk.Entry(self.child_tree, font=("Arial", 11))
-            self.entry_editor.insert(0, str(old_vals[col_idx]))
-
-        # エディターを配置
-        self.entry_editor.place(x=x, y=y, width=w, height=h)
-        self.entry_editor.focus_set()
-        self.entry_editor.select_range(0, tk.END)
-
-        print("エディター配置完了")
-
-        # イベントバインド - lambdaで現在の値をキャプチャ
-        def save_and_cleanup():
-            self._save_entry(item_id, col_idx)
-
-        def cancel_and_cleanup():
-            self._cancel_edit()
-
-        self.entry_editor.bind("<Return>", lambda e: save_and_cleanup())
-        self.entry_editor.bind("<Tab>", lambda e: save_and_cleanup())
-        self.entry_editor.bind("<FocusOut>", lambda e: save_and_cleanup())
-        self.entry_editor.bind("<Escape>", lambda e: cancel_and_cleanup())
-
-        # 他の場所をクリックした時も保存
-        def on_tree_click(e):
-            if self.entry_editor:
-                save_and_cleanup()
-
-        self.child_tree.bind("<Button-1>", on_tree_click, add=True)
-
-    def _cancel_edit(self):
-        """編集をキャンセル。"""
-        print("編集をキャンセルします")
-        if self.entry_editor:
-            try:
-                self.entry_editor.destroy()
-            except:
-                pass
-            self.entry_editor = None
-
-        # 一時的なイベントバインドを削除
+        Returns:
+            int: パースされた金額
+        """
+        if not amount_str:
+            return 0
         try:
-            self.child_tree.unbind("<Button-1>")
-            self.child_tree.bind("<Button-1>", lambda e: None)  # デフォルトの動作を復元
-        except:
-            pass
+            clean_amount = str(amount_str).replace(',', '').replace('¥', '').strip()
+            return int(clean_amount) if clean_amount else 0
+        except ValueError:
+            return 0
 
-    def _save_entry(self, item_id, col_idx):
-        """編集内容を保存。"""
-        print(f"編集内容を保存 - 行ID: {item_id}, 列: {col_idx}")
-        if not self.entry_editor:
-            print("エディターが存在しません")
-            return
-
-        try:
-            new_val = self.entry_editor.get()
-            print(f"新しい値: '{new_val}'")
-
-            # エディターを削除
-            self.entry_editor.destroy()
-            self.entry_editor = None
-
-            # 取引先を履歴に追加
-            if col_idx == 0 and new_val.strip():
-                self.parent_app.transaction_partners.add(new_val.strip())
-                print(f"取引先履歴に追加: {new_val.strip()}")
-
-            # ツリービューの値を更新
-            row_vals = list(self.child_tree.item(item_id, 'values'))
-            while len(row_vals) <= col_idx:
-                row_vals.append("")
-
-            old_val = row_vals[col_idx] if col_idx < len(row_vals) else ""
-            row_vals[col_idx] = new_val
-
-            print(f"行の値を更新: {old_val} -> {new_val}")
-            self.child_tree.item(item_id, values=row_vals)
-
-            # 最終行で何か入力されたら新しい行を追加
-            all_items = self.child_tree.get_children()
-            if item_id == all_items[-1]:
-                if any(str(cell).strip() for cell in row_vals):
-                    print("最終行に入力されたため新行を追加")
-                    self._add_row()
-
-            # 一時的なイベントバインドを削除
-            try:
-                self.child_tree.unbind("<Button-1>")
-                self.child_tree.bind("<Button-1>", lambda e: None)
-            except:
-                pass
-
-        except Exception as e:
-            print(f"保存エラー: {e}")
-            import traceback
-            traceback.print_exc()
-            if self.entry_editor:
-                try:
-                    self.entry_editor.destroy()
-                except:
-                    pass
-                self.entry_editor = None
-
-    def _on_right_click(self, event):
-        """右クリックメニューを表示。"""
-        item_id = self.child_tree.identify_row(event.y)
-        if item_id:
-            self.child_tree.selection_set(item_id)
-            self.context_menu.post(event.x_root, event.y_root)
-
-    def _delete_row(self):
-        """選択された行を削除。"""
-        selected_item = self.child_tree.selection()
-        if selected_item:
-            result = messagebox.askyesno("確認", "選択された行を削除しますか？")
-            if result:
-                self.child_tree.delete(selected_item[0])
-
-    def _on_ok_button(self):
-        """修正されたOKボタンの処理。"""
-        # ツリービューから全ての行を収集
-        all_rows = []
-        for iid in self.child_tree.get_children():
-            vals = self.child_tree.item(iid, 'values')
-            # 3要素に統一
-            row = list(vals)
-            while len(row) < 3:
-                row.append("")
-            all_rows.append(tuple(row))
-
-        # 空行を除去（全ての列が空またはスペースのみの行を除外）
-        filtered_rows = []
-        for row in all_rows:
-            if any(str(cell).strip() for cell in row):
-                filtered_rows.append(row)
-
-        print(f"フィルター前の行数: {len(all_rows)}, フィルター後: {len(filtered_rows)}")
-
-        # データが何もない場合の処理
-        if not filtered_rows:
-            print("データが空のため、親セルを空白にして保存を削除します")
-            # 親セルを空白に設定
-            dict_key_day = f"{self.year}-{self.month}-{self.day}"
-            self.parent_app.update_parent_cell(dict_key_day, self.col_index, "")
-
-            # child_dataからもこのキーを削除
-            if self.dict_key in self.parent_app.child_data:
-                del self.parent_app.child_data[self.dict_key]
-                print(f"child_dataからキー {self.dict_key} を削除しました")
-        else:
-            # データがある場合は通常の処理
-            print(f"データがあるため通常保存: {len(filtered_rows)}行")
-
-            # データ保存
-            self.parent_app.child_data[self.dict_key] = filtered_rows
-
-            # 金額列（インデックス1）を合計
-            total = 0
-            for row in filtered_rows:
-                try:
-                    amount = str(row[1]).replace(',', '').replace('¥', '').strip()
-                    if amount:
-                        total += int(amount)
-                except (ValueError, IndexError):
-                    pass
-
-            print(f"計算された合計金額: {total}")
-
-            # 親セル更新（合計が0の場合は空文字列）
-            dict_key_day = f"{self.year}-{self.month}-{self.day}"
-            display_value = str(total) if total != 0 else ""
-            self.parent_app.update_parent_cell(dict_key_day, self.col_index, display_value)
-
-        self.destroy()
-
-
-# ----------------------------------------------------------------------
-# メイン実行部分
-# ----------------------------------------------------------------------
+# ============================================================================
+# メイン実行部
+# ============================================================================
 if __name__ == "__main__":
+    # 日本語フォントを設定
     setup_japanese_font()
+
     try:
+        # Tkinterのルートウィンドウを作成
         root = tk.Tk()
-        app = YearApp(root)
+
+        # アプリケーションを初期化
+        app = HouseholdApp(root)
+
+        # メインループを開始
         root.mainloop()
+
     except Exception as e:
+        # エラーが発生した場合は詳細を表示
         print(f"アプリケーション実行エラー: {e}")
         import traceback
         traceback.print_exc()
