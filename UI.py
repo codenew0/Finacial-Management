@@ -605,49 +605,6 @@ class MonthlyDataDialog(BaseDialog):
             # フォーカスを設定
             self.parent_app.tree.focus(target_item)
 
-            # 一時的にハイライト（点滅効果）
-            self._flash_highlight(target_item, col_index)
-
-    def _flash_highlight(self, item_id, col_index):
-        """
-        指定されたセルを一時的にハイライトする（点滅効果）。
-
-        Args:
-            item_id: TreeviewアイテムID
-            col_index: 列インデックス
-        """
-        # 現在のタグを保存
-        original_tags = self.parent_app.tree.item(item_id, 'tags')
-
-        # ハイライト用のタグを定義（まだ存在しない場合）
-        if not hasattr(self.parent_app, '_highlight_tag_configured'):
-            self.parent_app.tree.tag_configure("highlight", background="#ffff99")  # 明るい黄色
-            self.parent_app._highlight_tag_configured = True
-
-        # 点滅効果を実行
-        def flash(count=0):
-            if count >= 6:  # 3回点滅（on/off × 3）
-                # 元のタグに戻す
-                self.parent_app.tree.item(item_id, tags=original_tags)
-                return
-
-            if count % 2 == 0:
-                # ハイライトを適用
-                self.parent_app.tree.item(item_id, tags="highlight")
-            else:
-                # 元のタグに戻す
-                self.parent_app.tree.item(item_id, tags=original_tags)
-
-            # 次の点滅を予約
-            self.parent_app.root.after(300, lambda: flash(count + 1))
-
-        # 点滅を開始
-        flash()
-
-        # メインウィンドウを前面に表示
-        self.parent_app.root.lift()
-        self.parent_app.root.focus_force()
-
     def _sort_by_column(self, column):
         """
         指定された列でデータをソートする。
@@ -1080,49 +1037,6 @@ class SearchDialog(BaseDialog):
 
             # フォーカスを設定
             self.parent_app.tree.focus(target_item)
-
-            # 一時的にハイライト（点滅効果）
-            self._flash_highlight(target_item, col_index)
-
-    def _flash_highlight(self, item_id, col_index):
-        """
-        指定されたセルを一時的にハイライトする（点滅効果）。
-
-        Args:
-            item_id: TreeviewアイテムID
-            col_index: 列インデックス
-        """
-        # 現在のタグを保存
-        original_tags = self.parent_app.tree.item(item_id, 'tags')
-
-        # ハイライト用のタグを定義（まだ存在しない場合）
-        if not hasattr(self.parent_app, '_highlight_tag_configured'):
-            self.parent_app.tree.tag_configure("highlight", background="#ffff99")  # 明るい黄色
-            self.parent_app._highlight_tag_configured = True
-
-        # 点滅効果を実行
-        def flash(count=0):
-            if count >= 6:  # 3回点滅（on/off × 3）
-                # 元のタグに戻す
-                self.parent_app.tree.item(item_id, tags=original_tags)
-                return
-
-            if count % 2 == 0:
-                # ハイライトを適用
-                self.parent_app.tree.item(item_id, tags="highlight")
-            else:
-                # 元のタグに戻す
-                self.parent_app.tree.item(item_id, tags=original_tags)
-
-            # 次の点滅を予約
-            self.parent_app.root.after(300, lambda: flash(count + 1))
-
-        # 点滅を開始
-        flash()
-
-        # メインウィンドウを前面に表示
-        self.parent_app.root.lift()
-        self.parent_app.root.focus_force()
 
     def _search(self):
         """
