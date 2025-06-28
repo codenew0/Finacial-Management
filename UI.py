@@ -49,7 +49,7 @@ class TreeviewTooltip:
     """
     Treeviewのセルにマウスオーバーした時に詳細情報を表示するツールチップ機能。
 
-    各セルの金額の内訳（取引先、金額、詳細）を表示し、
+    各セルの金額の内訳（支払先、金額、詳細）を表示し、
     合計行では日別の内訳、まとめ行では収入・支出の詳細を表示する。
     """
 
@@ -147,12 +147,12 @@ class TreeviewTooltip:
         """
         通常セルの詳細情報をツールチップで表示。
 
-        指定された日付と項目の全取引内容（取引先、金額、詳細）を
+        指定された日付と項目の全取引内容（支払先、金額、詳細）を
         リスト形式で表示し、複数取引がある場合は合計も表示する。
         """
         # child_dataから該当するデータを取得
         dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-{day}-{col_index}"
-        data_list = self.parent_app.child_data.get(dict_key, [])
+        data_list = self.parent_app.data.get(dict_key, [])
 
         if not data_list:
             self._hide_tooltip()
@@ -209,8 +209,8 @@ class TreeviewTooltip:
         # 月の全日について集計
         for day in range(1, days_in_month + 1):
             dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-{day}-{col_index}"
-            if dict_key in self.parent_app.child_data:
-                data_list = self.parent_app.child_data[dict_key]
+            if dict_key in self.parent_app.data:
+                data_list = self.parent_app.data[dict_key]
                 day_total = sum(self._parse_amount(row[1]) for row in data_list if len(row) > 1)
 
                 if day_total > 0:
@@ -236,7 +236,7 @@ class TreeviewTooltip:
         その月の全収入の内訳（収入源、金額、詳細）を表示する。
         """
         dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-0-3"
-        data_list = self.parent_app.child_data.get(dict_key, [])
+        data_list = self.parent_app.data.get(dict_key, [])
 
         if not data_list:
             self._hide_tooltip()
@@ -283,8 +283,8 @@ class TreeviewTooltip:
             # その項目の月間合計を計算
             for day in range(1, days_in_month + 1):
                 dict_key = f"{self.parent_app.current_year}-{self.parent_app.current_month}-{day}-{col_index}"
-                if dict_key in self.parent_app.child_data:
-                    for row in self.parent_app.child_data[dict_key]:
+                if dict_key in self.parent_app.data:
+                    for row in self.parent_app.data[dict_key]:
                         if len(row) > 1:
                             column_total += self._parse_amount(row[1])
 
@@ -477,7 +477,7 @@ class MonthlyDataDialog(BaseDialog):
         result_frame.grid_columnconfigure(0, weight=1)
 
         # Treeview（データ表示用のテーブル）
-        columns = ["年月日", "項目", "取引先", "金額", "詳細"]
+        columns = ["年月日", "項目", "支払先", "金額（円）", "メモ"]
         self.result_tree = ttk.Treeview(result_frame, columns=columns, show="headings", height=15)
 
         # 重複データ用のタグを設定（薄い赤色の背景）
@@ -487,12 +487,19 @@ class MonthlyDataDialog(BaseDialog):
         for col in columns:
             self.result_tree.heading(col, text=col, command=lambda c=col: self._sort_by_column(c))
 
-        # 列幅の設定（データの特性に応じて最適化）
-        self.result_tree.column("年月日", anchor="center", width=100, minwidth=80)
-        self.result_tree.column("項目", anchor="center", width=120, minwidth=100)
-        self.result_tree.column("取引先", anchor="center", width=150, minwidth=120)
-        self.result_tree.column("金額", anchor="center", width=100, minwidth=80)
-        self.result_tree.column("詳細", anchor="center", width=200, minwidth=150)
+        # 列幅の設定とデフォルト値の保存
+        self.default_column_widths = {}
+        widths = {
+            "年月日": 100,
+            "項目": 120,
+            "支払先": 150,
+            "金額（円）": 100,
+            "メモ": 200
+        }
+
+        for col, width in widths.items():
+            self.result_tree.column(col, anchor="center", width=width, minwidth=int(width*0.8))
+            self.default_column_widths[col] = width
 
         self.result_tree.grid(row=0, column=0, sticky="nsew")
 
@@ -529,6 +536,35 @@ class MonthlyDataDialog(BaseDialog):
 
         # ダブルクリックイベントを追加
         self.result_tree.bind("<Double-1>", self._on_double_click)
+
+        # 右クリックイベントを追加
+        self.result_tree.bind("<Button-3>", self._on_header_right_click)
+
+    def _on_header_right_click(self, event):
+        """ヘッダーの右クリックイベントを処理する。"""
+        region = self.result_tree.identify_region(event.x, event.y)
+        if region != "heading":
+            return
+
+        col_id = self.result_tree.identify_column(event.x)
+        if not col_id:
+            return
+
+        # 右クリックメニューを作成
+        context_menu = tk.Menu(self, tearoff=0)
+        context_menu.add_command(label="全ての列幅をリセット",
+                                 command=self._reset_all_column_widths)
+
+        context_menu.post(event.x_root, event.y_root)
+
+    def _reset_all_column_widths(self):
+        """全ての列の幅をデフォルトにリセットする。"""
+        columns = ["年月日", "項目", "支払先", "金額（円）", "メモ"]
+
+        for i, col_name in enumerate(columns):
+            col_id = f"#{i + 1}"
+            if col_name in self.default_column_widths:
+                self.result_tree.column(col_id, width=self.default_column_widths[col_name])
 
     def _on_double_click(self, event):
         """
@@ -627,9 +663,9 @@ class MonthlyDataDialog(BaseDialog):
         sort_key_map = {
             "年月日": lambda x: x['sort_key'],  # タプル形式の日付でソート
             "項目": lambda x: x['column'],
-            "取引先": lambda x: x['partner'],
-            "金額": lambda x: x['amount_value'],  # 数値でソート
-            "詳細": lambda x: x['detail']
+            "支払先": lambda x: x['partner'],
+            "金額（円）": lambda x: x['amount_value'],  # 数値でソート
+            "メモ": lambda x: x['detail']
         }
 
         # データをソート
@@ -669,7 +705,7 @@ class MonthlyDataDialog(BaseDialog):
 
         昇順の場合は▲、降順の場合は▼を列名の後ろに付ける。
         """
-        columns = ["年月日", "項目", "取引先", "金額", "詳細"]
+        columns = ["年月日", "項目", "支払先", "金額（円）", "メモ"]
 
         for col in columns:
             if col == self.sort_column:
@@ -684,7 +720,7 @@ class MonthlyDataDialog(BaseDialog):
         """
         重複データを検出して薄い赤色でハイライトする。
 
-        すべてのフィールド（年月日、項目、取引先、金額、詳細）が
+        すべてのフィールド（年月日、項目、支払先、金額、詳細）が
         完全に一致する行を重複と判定し、該当する行に
         "duplicate"タグを適用する。
         """
@@ -747,7 +783,7 @@ class MonthlyDataDialog(BaseDialog):
         total_count = 0  # 取引件数
 
         # child_dataから該当月のデータを検索
-        for dict_key, data_list in self.parent_app.child_data.items():
+        for dict_key, data_list in self.parent_app.data.items():
             try:
                 # キーを解析（形式: "年-月-日-列インデックス"）
                 parts = dict_key.split("-")
@@ -770,7 +806,7 @@ class MonthlyDataDialog(BaseDialog):
 
                         # 各取引データを処理
                         for row in data_list:
-                            if len(row) >= 3:  # 必要な要素（取引先、金額、詳細）が揃っているか確認
+                            if len(row) >= 3:  # 必要な要素（支払先、金額、詳細）が揃っているか確認
                                 # 各フィールドのデータを安全に取得
                                 partner = str(row[0]).strip() if row[0] else ""
                                 amount_str = str(row[1]).strip() if row[1] else ""
@@ -849,7 +885,7 @@ class SearchDialog(BaseDialog):
     """
     取引データを検索するためのダイアログ。
 
-    全期間のデータから、取引先名、金額、詳細のいずれかに
+    全期間のデータから、支払先名、金額、詳細のいずれかに
     検索文字列が含まれる取引を抽出して表示する。
     大文字小文字を区別しない部分一致検索を行う。
     """
@@ -870,12 +906,6 @@ class SearchDialog(BaseDialog):
         self._create_widgets()
 
     def _create_widgets(self):
-        """
-        検索ダイアログのUI要素を作成する。
-
-        検索入力フィールド、検索ボタン、結果表示用のTreeview、
-        結果カウンター、閉じるボタンなどを配置する。
-        """
         # グリッドレイアウトの設定
         self.grid_rowconfigure(1, weight=1)  # 結果表示エリアを伸縮可能に
         self.grid_columnconfigure(0, weight=1)
@@ -913,18 +943,25 @@ class SearchDialog(BaseDialog):
         result_frame.grid_columnconfigure(0, weight=1)
 
         # 結果表示用Treeview
-        columns = ["年月日", "項目", "取引先", "金額", "詳細"]
+        columns = ["年月日", "項目", "支払先", "金額（円）", "メモ"]
         self.result_tree = ttk.Treeview(result_frame, columns=columns, show="headings", height=15)
 
         # 列の設定
+        self.default_column_widths = {}  # デフォルト列幅を保存
         for col in columns:
             self.result_tree.heading(col, text=col)
 
-        self.result_tree.column("年月日", anchor="center", width=100, minwidth=80)
-        self.result_tree.column("項目", anchor="center", width=120, minwidth=100)
-        self.result_tree.column("取引先", anchor="center", width=150, minwidth=120)
-        self.result_tree.column("金額", anchor="center", width=100, minwidth=80)
-        self.result_tree.column("詳細", anchor="center", width=200, minwidth=150)
+        widths = {
+            "年月日": 100,
+            "項目": 120,
+            "支払先": 150,
+            "金額（円）": 100,
+            "メモ": 200
+        }
+
+        for col, width in widths.items():
+            self.result_tree.column(col, anchor="center", width=width, minwidth=int(width * 0.8))
+            self.default_column_widths[col] = width
 
         self.result_tree.grid(row=0, column=0, sticky="nsew")
 
@@ -956,6 +993,35 @@ class SearchDialog(BaseDialog):
 
         # ダブルクリックイベントを追加
         self.result_tree.bind("<Double-1>", self._on_double_click)
+
+        # 右クリックイベントを追加
+        self.result_tree.bind("<Button-3>", self._on_header_right_click)
+
+    def _on_header_right_click(self, event):
+        """ヘッダーの右クリックイベントを処理する。"""
+        region = self.result_tree.identify_region(event.x, event.y)
+        if region != "heading":
+            return
+
+        col_id = self.result_tree.identify_column(event.x)
+        if not col_id:
+            return
+
+        # 右クリックメニューを作成
+        context_menu = tk.Menu(self, tearoff=0)
+        context_menu.add_command(label="全ての列幅をリセット",
+                                 command=self._reset_all_column_widths)
+
+        context_menu.post(event.x_root, event.y_root)
+
+    def _reset_all_column_widths(self):
+        """全ての列の幅をデフォルトにリセットする。"""
+        columns = ["年月日", "項目", "支払先", "金額（円）", "メモ"]
+
+        for i, col_name in enumerate(columns):
+            col_id = f"#{i + 1}"
+            if col_name in self.default_column_widths:
+                self.result_tree.column(col_id, width=self.default_column_widths[col_name])
 
     def _on_mousewheel(self, event):
         """マウスホイールによるスクロール処理。"""
@@ -1060,7 +1126,7 @@ class SearchDialog(BaseDialog):
         search_text_lower = search_text.lower()  # 大文字小文字を区別しない検索のため
 
         # 全データから検索
-        for dict_key, data_list in self.parent_app.child_data.items():
+        for dict_key, data_list in self.parent_app.data.items():
             try:
                 # キーを解析
                 parts = dict_key.split("-")
@@ -1401,7 +1467,7 @@ class ChartDialog(BaseDialog):
         """
         monthly_totals = {}
 
-        for dict_key, data_list in self.parent_app.child_data.items():
+        for dict_key, data_list in self.parent_app.data.items():
             try:
                 parts = dict_key.split("-")
                 if len(parts) == 4:
@@ -1440,7 +1506,7 @@ class ChartDialog(BaseDialog):
         """
         monthly_totals = {}
 
-        for dict_key, data_list in self.parent_app.child_data.items():
+        for dict_key, data_list in self.parent_app.data.items():
             try:
                 parts = dict_key.split("-")
                 if len(parts) == 4:
@@ -1475,7 +1541,7 @@ class ChartDialog(BaseDialog):
         """
         monthly_totals = {}
 
-        for dict_key, data_list in self.parent_app.child_data.items():
+        for dict_key, data_list in self.parent_app.data.items():
             try:
                 parts = dict_key.split("-")
                 if len(parts) == 4:
@@ -1526,9 +1592,9 @@ class TransactionDialog(BaseDialog):
     """
     取引詳細を入力・編集するダイアログ。
 
-    特定の日付・項目の取引データ（取引先、金額、詳細）を
+    特定の日付・項目の取引データ（支払先、金額、詳細）を
     テーブル形式で入力・編集できる。
-    取引先の入力時には過去の履歴から候補を表示する。
+    支払先の入力時には過去の履歴から候補を表示する。
     """
 
     def __init__(self, parent, parent_app, dict_key, col_name):
@@ -1583,17 +1649,17 @@ class TransactionDialog(BaseDialog):
         tree_container.grid_columnconfigure(0, weight=1)
 
         # 取引データ編集用Treeview
-        columns = ["取引先", "金額", "詳細"]
+        columns = ["支払先", "金額（円）", "メモ"]
         self.tree = ttk.Treeview(tree_container, columns=columns, show="headings")
 
         # 列の設定
-        self.tree.heading("取引先", text="取引先")
-        self.tree.heading("金額", text="金額")
-        self.tree.heading("詳細", text="詳細")
+        self.tree.heading("支払先", text="支払先")
+        self.tree.heading("金額（円）", text="金額（円）")
+        self.tree.heading("メモ", text="メモ")
 
-        self.tree.column("取引先", anchor="center", width=150, minwidth=100)
-        self.tree.column("金額", anchor="center", width=100, minwidth=80)
-        self.tree.column("詳細", anchor="center", width=200, minwidth=150)
+        self.tree.column("支払先", anchor="center", width=150, minwidth=100)
+        self.tree.column("金額（円）", anchor="center", width=100, minwidth=80)
+        self.tree.column("メモ", anchor="center", width=200, minwidth=150)
 
         self.tree.grid(row=0, column=0, sticky="nsew")
 
@@ -1666,7 +1732,7 @@ class TransactionDialog(BaseDialog):
             self.tree.delete(item)
 
         # child_dataからデータを取得
-        data_list = self.parent_app.child_data.get(self.dict_key, [])
+        data_list = self.parent_app.data.get(self.dict_key, [])
 
         if not data_list:
             # データがない場合は空行を1つ追加
@@ -1700,7 +1766,7 @@ class TransactionDialog(BaseDialog):
 
         クリックされたセルの位置にエディターを表示し、
         インライン編集を可能にする。
-        取引先列の場合はコンボボックス、その他はEntryを使用。
+        支払先列の場合はコンボボックス、その他はEntryを使用。
         """
         # 既存のエディターがあれば保存してから削除
         if self.entry_editor:
@@ -1728,8 +1794,8 @@ class TransactionDialog(BaseDialog):
 
         x, y, w, h = bbox
 
-        if col_idx == 0:  # 取引先列の場合
-            # コンボボックスを作成（過去の取引先履歴を候補として表示）
+        if col_idx == 0:  # 支払先列の場合
+            # コンボボックスを作成（過去の支払先履歴を候補として表示）
             self.entry_editor = ttk.Combobox(self.tree, font=("Arial", 11))
             partner_list = sorted(list(self.parent_app.transaction_partners))
             self.entry_editor['values'] = partner_list
@@ -1773,7 +1839,7 @@ class TransactionDialog(BaseDialog):
             self.entry_editor.destroy()
             self.entry_editor = None
 
-            # 取引先の場合は履歴に追加
+            # 支払先の場合は履歴に追加
             if col_idx == 0 and new_value.strip():
                 self.parent_app.transaction_partners.add(new_value.strip())
 
@@ -1865,12 +1931,12 @@ class TransactionDialog(BaseDialog):
             self.parent_app.update_parent_cell(dict_key_day, self.col_index, "")
 
             # child_dataからキーを削除
-            if self.dict_key in self.parent_app.child_data:
-                del self.parent_app.child_data[self.dict_key]
+            if self.dict_key in self.parent_app.data:
+                del self.parent_app.data[self.dict_key]
         else:
             # データがある場合
             # child_dataに保存
-            self.parent_app.child_data[self.dict_key] = filtered_rows
+            self.parent_app.data[self.dict_key] = filtered_rows
 
             # 金額列（インデックス1）を合計
             total = sum(self._parse_amount(row[1]) for row in filtered_rows if len(row) > 1)
@@ -1908,7 +1974,7 @@ class HouseholdApp:
     年間の家計データを月別に管理し、項目ごとの支出・収入を
     記録・集計・分析する機能を提供する。
     データはJSONファイルに保存され、カスタム項目の追加や
-    取引先の履歴管理もサポートする。
+    支払先の履歴管理もサポートする。
     """
 
     def __init__(self, root):
@@ -1943,7 +2009,7 @@ class HouseholdApp:
 
         # ウィンドウサイズと位置の設定
         window_width = 1400
-        window_height = 1000
+        window_height = 1020
 
         # 画面の中央に配置
         screen_width = self.root.winfo_screenwidth()
@@ -2055,13 +2121,25 @@ class HouseholdApp:
         self.current_year = now.year
         self.current_month = now.month
         self.tree = None  # メインのTreeviewウィジェット
-        self.child_data = {}  # 詳細データを格納する辞書
-        self.transaction_partners = set()  # 取引先の履歴
+        self.data = {}  # 詳細データを格納する辞書
+        self.transaction_partners = set()  # 支払先の履歴
 
-        # デフォルトの支出項目
+        # より適切な支出項目名に変更
         self.default_columns = [
-            "日付", "交通", "外食", "食品", "日常用品", "通販", "ゲーム課金",
-            "ゲーム購入", "サービス", "家賃", "公共料金", "携帯・回線", "保険", "他"
+            "日付",
+            "交通費",
+            "外食費",
+            "食料品費",
+            "日用品費",
+            "通販ネット",
+            "娯楽費",
+            "教育費",
+            "サブスク",
+            "住居費",
+            "光熱水費",
+            "通信費",
+            "保険料",
+            "その他"
         ]
         self.custom_columns = []  # ユーザー定義の項目
 
@@ -2069,7 +2147,7 @@ class HouseholdApp:
         """
         設定ファイルから設定を読み込む。
 
-        カスタム項目と取引先履歴を復元する。
+        カスタム項目と支払先履歴を復元する。
         ファイルが存在しない場合や読み込みエラーの場合は
         デフォルト値を使用する。
         """
@@ -2087,7 +2165,7 @@ class HouseholdApp:
         """
         設定をファイルに保存する。
 
-        カスタム項目と取引先履歴をJSONファイルに保存する。
+        カスタム項目と支払先履歴をJSONファイルに保存する。
         """
         settings = {
             "custom_columns": self.custom_columns,
@@ -2116,10 +2194,10 @@ class HouseholdApp:
 
             if "version" in all_data:
                 # 新フォーマット
-                self.child_data = all_data.get("child_data", {})
+                self.data = all_data.get("data", {})
             else:
                 # 旧フォーマット（後方互換性）
-                self.child_data = all_data.get("child_data", {})
+                self.data = all_data.get("data", {})
                 self._extract_partners_from_data()
         except Exception:
             # 読み込みエラーは無視（空のデータで開始）
@@ -2127,12 +2205,12 @@ class HouseholdApp:
 
     def _extract_partners_from_data(self):
         """
-        既存のデータから取引先を抽出して履歴に追加する。
+        既存のデータから支払先を抽出して履歴に追加する。
 
-        旧フォーマットのデータから取引先情報を
+        旧フォーマットのデータから支払先情報を
         抽出するための互換性処理。
         """
-        for data_list in self.child_data.values():
+        for data_list in self.data.values():
             for row in data_list:
                 if len(row) > 0 and row[0].strip():
                     self.transaction_partners.add(row[0].strip())
@@ -2146,7 +2224,7 @@ class HouseholdApp:
         """
         all_data = {
             "version": "2.0",
-            "child_data": self.child_data
+            "data": self.data
         }
         try:
             with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -2283,15 +2361,21 @@ class HouseholdApp:
         self.tree.grid(row=0, column=0, sticky="nsew")
 
         # 各列の設定
+        self.default_column_widths = {}  # デフォルト列幅を保存
         for i, col in enumerate(all_columns):
             self.tree.heading(col, text=col)
 
             if i == 0:  # 日付列
-                self.tree.column(col, anchor="center", width=60, minwidth=50)
+                width = 60
+                self.tree.column(col, anchor="center", width=width, minwidth=50)
             elif col == "＋":  # 追加ボタン列
-                self.tree.column(col, anchor="center", width=40, minwidth=40, stretch=False)
+                width = 40
+                self.tree.column(col, anchor="center", width=width, minwidth=40, stretch=False)
             else:  # データ列
-                self.tree.column(col, anchor="center", width=80, minwidth=60)
+                width = 80
+                self.tree.column(col, anchor="center", width=width, minwidth=60)
+
+            self.default_column_widths[col] = width  # デフォルト幅を保存
 
         # スクロールバー（縦）
         v_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
@@ -2463,8 +2547,8 @@ class HouseholdApp:
         # 各項目の合計を計算
         for col_index in range(1, len(all_columns)):
             dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_index}"
-            if dict_key in self.child_data:
-                data_list = self.child_data[dict_key]
+            if dict_key in self.data:
+                data_list = self.data[dict_key]
                 # 金額列（インデックス1）を合計
                 total = sum(self._parse_amount(row[1]) for row in data_list if len(row) > 1)
                 if total != 0:
@@ -2504,8 +2588,8 @@ class HouseholdApp:
             int: 収入の合計金額
         """
         dict_key = f"{self.current_year}-{self.current_month}-0-3"
-        if dict_key in self.child_data:
-            data_list = self.child_data[dict_key]
+        if dict_key in self.data:
+            data_list = self.data[dict_key]
             return sum(self._parse_amount(row[1]) for row in data_list if len(row) > 1)
         return 0
 
@@ -2658,12 +2742,7 @@ class HouseholdApp:
         TransactionDialog(self.root, self, dict_key, col_name)
 
     def _on_right_click(self, event):
-        """
-        右クリックイベントを処理する。
-
-        カスタム列のヘッダーで右クリックされた場合、
-        編集・削除メニューを表示する。
-        """
+        """右クリックイベントを処理する。"""
         region = self.tree.identify_region(event.x, event.y)
         if region != "heading":
             return
@@ -2675,12 +2754,31 @@ class HouseholdApp:
         col_index = int(col_id[1:]) - 1
         all_columns = self.default_columns + self.custom_columns
 
-        # カスタム列のみ編集・削除可能
-        if col_index >= len(all_columns) or col_index == 0 or col_index < len(self.default_columns):
-            return
+        # 右クリックメニューを再作成
+        self.column_context_menu = tk.Menu(self.root, tearoff=0)
 
-        self.selected_column_index = col_index
+        # カスタム列の場合は編集・削除オプションを追加
+        if len(all_columns) > col_index >= len(self.default_columns) and col_index != 0:
+            self.selected_column_index = col_index
+            self.column_context_menu.add_command(label="列名を編集", command=self._edit_column_name)
+            self.column_context_menu.add_separator()
+            self.column_context_menu.add_command(label="列を削除", command=self._delete_column)
+            self.column_context_menu.add_separator()
+
+        # すべての列で列幅リセットを利用可能
+        self.column_context_menu.add_command(label="全ての列幅をリセット",
+                                             command=self._reset_all_column_widths)
+
         self.column_context_menu.post(event.x_root, event.y_root)
+
+    def _reset_all_column_widths(self):
+        """指定された列の幅をデフォルトにリセットする。"""
+        all_columns = self.default_columns + self.custom_columns + ["＋"]
+
+        for i, col_name in enumerate(all_columns):
+            col_id = f"#{i + 1}"
+            if col_name in self.default_column_widths:
+                self.tree.column(col_id, width=self.default_column_widths[col_name])
 
     def _add_column(self):
         """
@@ -2836,12 +2934,12 @@ class HouseholdApp:
 
             # 関連するデータを削除
             # child_dataから該当列のデータを持つキーを特定
-            keys_to_delete = [key for key in self.child_data.keys()
+            keys_to_delete = [key for key in self.data.keys()
                               if key.split("-")[3] == str(col_index)]
 
             # データを削除
             for key in keys_to_delete:
-                del self.child_data[key]
+                del self.data[key]
 
             # Treeviewを再作成して変更を反映
             self._recreate_treeview()

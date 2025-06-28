@@ -2,9 +2,9 @@
   "custom_columns": [],
   "transaction_partners": [
     "steam",
-    "aaa",
-    "AAA",
     "wakaran",
-    "UR"
+    "UR",
+    "aaa",
+    "AAA"
   ]
 }
