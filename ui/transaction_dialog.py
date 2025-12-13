@@ -33,6 +33,11 @@ class TransactionDialog(BaseDialog):
         self.col_name = col_name
         self.entry_editor = None
         
+        # 【追加】自動補完用の変数
+        self.autocomplete_candidates = []  # 現在の候補リスト
+        self.autocomplete_index = -1  # 現在の候補インデックス
+        self.autocomplete_original_text = ""  # 元のテキスト
+        
         # キーを解析して年月日と列インデックスを取得
         parts = dict_key.split("-")
         if len(parts) == 4:
@@ -129,7 +134,7 @@ class TransactionDialog(BaseDialog):
         self.context_menu.add_command(label="行を削除 (Delete)", command=self._delete_row)
         
         # 使用方法のヒント
-        hint_label = tk.Label(self, text="使い方: ダブルクリックで編集、Shift+クリックで複数選択、右クリックでメニュー表示",
+        hint_label = tk.Label(self, text="使い方: ダブルクリックで編集、TABキーで自動補完、Shift+クリックで複数選択",
                               font=('Arial', 10), fg='#666666', bg='#f0f0f0')
         hint_label.grid(row=3, column=0, pady=(5, 10))
         
@@ -174,6 +179,90 @@ class TransactionDialog(BaseDialog):
         self.tree.selection_set(item_id)
         self.tree.see(item_id)
     
+    # 【追加】自動補完機能のメソッド群
+    def _get_autocomplete_candidates(self, text, col_idx):
+        """
+        入力テキストに基づいて自動補完候補を取得する
+        
+        Args:
+            text: 入力されたテキスト
+            col_idx: 列インデックス（0:支払先、2:メモ）
+            
+        Returns:
+            list: マッチする候補のリスト
+        """
+        if not text:
+            return []
+        
+        text_lower = text.lower()
+        
+        if col_idx == 0:  # 支払先列
+            # 支払先の履歴から候補を取得
+            all_partners = self.parent_app.data_manager.get_transaction_partners_list()
+            candidates = [p for p in all_partners if p.lower().startswith(text_lower)]
+        elif col_idx == 2:  # メモ列
+            # 過去のメモから候補を取得
+            all_memos = self._get_all_memos()
+            candidates = [m for m in all_memos if m.lower().startswith(text_lower)]
+        else:
+            candidates = []
+        
+        return sorted(candidates)
+    
+    def _get_all_memos(self):
+        """全取引データからメモを収集する"""
+        memos = set()
+        for data_list in self.parent_app.data_manager.data.values():
+            for row in data_list:
+                if len(row) >= 3 and row[2] and str(row[2]).strip():
+                    memos.add(str(row[2]).strip())
+        return sorted(list(memos))
+    
+    def _handle_autocomplete_tab(self, event, item_id, col_idx):
+        """
+        TABキーによる自動補完を処理する
+        
+        Args:
+            event: イベントオブジェクト
+            item_id: 現在編集中のアイテムID
+            col_idx: 列インデックス
+            
+        Returns:
+            str: "break"を返してデフォルトのTAB動作を抑制
+        """
+        if not self.entry_editor:
+            return
+        
+        current_text = self.entry_editor.get()
+        
+        # 初回のTAB押下時、または入力テキストが変更された場合
+        if (self.autocomplete_index == -1 or 
+            current_text != self.autocomplete_original_text):
+            # 候補を新規取得
+            self.autocomplete_candidates = self._get_autocomplete_candidates(current_text, col_idx)
+            self.autocomplete_original_text = current_text
+            self.autocomplete_index = -1
+        
+        # 候補がない場合は何もしない
+        if not self.autocomplete_candidates:
+            return "break"
+        
+        # 次の候補に進む
+        self.autocomplete_index = (self.autocomplete_index + 1) % len(self.autocomplete_candidates)
+        selected_candidate = self.autocomplete_candidates[self.autocomplete_index]
+        
+        # エディタのテキストを更新
+        self.entry_editor.delete(0, tk.END)
+        self.entry_editor.insert(0, selected_candidate)
+        
+        return "break"  # デフォルトのTAB動作を抑制
+    
+    def _reset_autocomplete(self):
+        """自動補完状態をリセット"""
+        self.autocomplete_candidates = []
+        self.autocomplete_index = -1
+        self.autocomplete_original_text = ""
+    
     def _on_double_click(self, event):
         """セルのダブルクリックイベントを処理する"""
         if self.entry_editor:
@@ -197,6 +286,9 @@ class TransactionDialog(BaseDialog):
         
         x, y, w, h = bbox
         
+        # 自動補完状態をリセット
+        self._reset_autocomplete()
+        
         if col_idx == 0:  # 支払先列の場合
             self.entry_editor = ttk.Combobox(self.tree, font=("Arial", 11))
             partner_list = self.parent_app.data_manager.get_transaction_partners_list()
@@ -212,11 +304,30 @@ class TransactionDialog(BaseDialog):
         
         # イベントバインド
         self.entry_editor.bind("<Return>", lambda e: self._save_edit(item_id, col_idx))
-        self.entry_editor.bind("<Tab>", lambda e: self._save_edit(item_id, col_idx))
+        # 【修正】TABキーは自動補完に使用し、フィールド移動はしない
+        self.entry_editor.bind("<Tab>", lambda e: self._handle_autocomplete_tab(e, item_id, col_idx))
         self.entry_editor.bind("<FocusOut>", lambda e: self._save_edit(item_id, col_idx))
         self.entry_editor.bind("<Escape>", lambda e: self._cancel_edit())
         
+        # 【追加】テキスト変更時に自動補完状態をリセット（Combobox以外）
+        if col_idx != 0:
+            self.entry_editor.bind("<KeyRelease>", lambda e: self._on_text_change(e))
+        
         self.tree.bind("<Button-1>", lambda e: self._save_edit(item_id, col_idx) if self.entry_editor else None, add=True)
+    
+    def _on_text_change(self, event):
+        """
+        テキスト変更時の処理（TABキー以外）
+        
+        Args:
+            event: イベントオブジェクト
+        """
+        # TABキーの場合は何もしない
+        if event.keysym == "Tab":
+            return
+        
+        # 自動補完状態をリセット
+        self._reset_autocomplete()
     
     def _save_edit(self, item_id, col_idx):
         """エディターの内容を保存する"""
@@ -227,6 +338,9 @@ class TransactionDialog(BaseDialog):
             new_value = self.entry_editor.get()
             self.entry_editor.destroy()
             self.entry_editor = None
+            
+            # 自動補完状態をリセット
+            self._reset_autocomplete()
             
             # 支払先の場合は履歴に追加
             if col_idx == 0 and new_value.strip():
@@ -250,6 +364,7 @@ class TransactionDialog(BaseDialog):
             if self.entry_editor:
                 self.entry_editor.destroy()
                 self.entry_editor = None
+            self._reset_autocomplete()
     
     def _cancel_edit(self):
         """編集をキャンセルしてエディターを削除する"""
@@ -259,6 +374,9 @@ class TransactionDialog(BaseDialog):
             except:
                 pass
             self.entry_editor = None
+        
+        # 自動補完状態をリセット
+        self._reset_autocomplete()
         
         try:
             self.tree.unbind("<Button-1>")
