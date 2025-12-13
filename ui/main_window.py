@@ -369,6 +369,7 @@ class MainWindow:
         self.tree.bind("<MouseWheel>", self._on_mousewheel)
         self.tree.bind("<Shift-MouseWheel>",
                        lambda e: self.tree.xview_scroll(int(-1 * (e.delta / 120)), "units"))
+        self.tree.bind("<space>", self._on_space_key)
         
         # 右クリックメニュー(カスタム列用)
         self.column_context_menu = tk.Menu(self.root, tearoff=0)
@@ -397,7 +398,7 @@ class MainWindow:
         
         style.map("Treeview",
                   background=[('selected', '#0078d4')],
-                  foreground=[('selected', 'white')])
+                  foreground=[('selected', 'yellow')])
     
     def _prev_year(self):
         """前年に移動する"""
@@ -707,6 +708,77 @@ class MainWindow:
             self.tree.xview_scroll(int(-1 * (event.delta / 120)), "units")
         else:
             self.tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    
+    def _on_space_key(self, event):
+        """
+        SPACEキーが押された時の処理
+        選択中のセルの詳細ダイアログを開く
+        """
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return
+        
+        row_id = selected_items[0]
+        
+        # フォーカスされている列を取得
+        focus_item = self.tree.focus()
+        if not focus_item:
+            return
+        
+        # 現在選択されている列のインデックスを取得
+        # （Treeviewは列のフォーカスを直接取得できないため、
+        # 最後にクリックされた列を使用）
+        if not hasattr(self, 'selected_column_id') or not self.selected_column_id:
+            return
+        
+        col_id = self.selected_column_id
+        col_index = int(col_id[1:]) - 1
+        
+        # 編集不可のセルをチェック
+        items = self.tree.get_children()
+        if len(items) < 2:
+            return
+        
+        total_row_id = items[-2]
+        summary_row_id = items[-1]
+        
+        # 合計行は編集不可
+        if row_id == total_row_id:
+            return
+        
+        # まとめ行は収入列のみ編集可能
+        if row_id == summary_row_id and col_id != "#4":
+            return
+        
+        # 日付列は編集不可
+        if col_id == "#1":
+            return
+        
+        # +ボタン列は編集不可
+        all_columns = self.get_all_columns()
+        if col_index >= len(all_columns):
+            return
+        
+        # 行データを取得
+        row_vals = self.tree.item(row_id, 'values')
+        if not row_vals:
+            return
+        
+        # 日付と列名を特定
+        if row_id == summary_row_id:
+            day = 0
+            col_index = 3  # 収入列
+            col_name = "収入"
+        else:
+            try:
+                day = int(row_vals[0])
+            except:
+                return
+            col_name = self.tree.heading(col_id, "text")
+        
+        # 取引詳細ダイアログを開く
+        dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_index}"
+        TransactionDialog(self.root, self, dict_key, col_name)
     
     def _reset_all_column_widths(self):
         """指定された列の幅をデフォルトにリセットする"""
@@ -1058,3 +1130,4 @@ class MainWindow:
         
         # UI更新（空文字にする）
         self.update_parent_cell(f"{self.current_year}-{self.current_month}-{day}", col_idx, "")
+        

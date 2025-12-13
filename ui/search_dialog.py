@@ -83,9 +83,12 @@ class SearchDialog(BaseDialog):
             "金額(円)": 100,
             "メモ": 200
         }
+
+        self.sort_column = None
+        self.sort_reverse = False
         
         for col in columns:
-            self.result_tree.heading(col, text=col)
+            self.result_tree.heading(col, text=col, command=lambda c=col: self._sort_by_column(c))
             width = widths.get(col, 100)
             self.result_tree.column(col, anchor="center", width=width, minwidth=int(width * 0.8))
             self.default_column_widths[col] = width
@@ -126,6 +129,65 @@ class SearchDialog(BaseDialog):
         self.result_tree.bind("<MouseWheel>", self._on_mousewheel)
         self.result_tree.bind("<Double-1>", self._on_double_click)
         self.result_tree.bind("<Button-3>", self._on_header_right_click)
+
+    def _sort_by_column(self, column):
+        """
+        指定された列でデータをソートする
+        
+        Args:
+            column: ソート対象の列名
+        """
+        if self.sort_column == column:
+            # 同じ列をクリックした場合は昇順/降順を切り替え
+            self.sort_reverse = not self.sort_reverse
+        else:
+            # 新しい列の場合は昇順でソート
+            self.sort_column = column
+            self.sort_reverse = False
+        
+        # ソートキーのマッピング
+        sort_key_map = {
+            "年月日": lambda x: (x['year'], x['month'], x['day']),
+            "項目": lambda x: x['column'],
+            "支払先": lambda x: x['partner'],
+            "金額(円)": lambda x: parse_amount(x['amount']),
+            "メモ": lambda x: x['detail']
+        }
+        
+        # データをソート
+        self.search_results.sort(key=sort_key_map.get(column, lambda x: ""),
+                                reverse=self.sort_reverse)
+        
+        # Treeviewを更新
+        self._refresh_treeview()
+        
+        # 列ヘッダーを更新（ソート方向を表示）
+        self._update_column_headers()
+    
+    def _refresh_treeview(self):
+        """ソート後のデータでTreeviewを再表示する"""
+        # 既存のアイテムをクリア
+        for item in self.result_tree.get_children():
+            self.result_tree.delete(item)
+        
+        # ソート済みデータを再表示
+        for result in self.search_results:
+            values = [result['date'], result['column'], result['partner'],
+                      result['amount'], result['detail']]
+            self.result_tree.insert("", "end", values=values)
+    
+    def _update_column_headers(self):
+        """ソート状態を示すため、列ヘッダーに矢印を表示する"""
+        columns = ["年月日", "項目", "支払先", "金額(円)", "メモ"]
+        
+        for col in columns:
+            if col == self.sort_column:
+                # ソート中の列には矢印を表示
+                arrow = " ▼" if self.sort_reverse else " ▲"
+                self.result_tree.heading(col, text=f"{col}{arrow}")
+            else:
+                # その他の列は通常表示
+                self.result_tree.heading(col, text=col)
     
     def _on_header_right_click(self, event):
         """ヘッダーの右クリックイベントを処理する"""
@@ -256,7 +318,9 @@ class SearchDialog(BaseDialog):
             }
             self.search_results.append(search_result)
         
-        # 結果を日付順にソート
+        # 結果を日付順にソート（デフォルト）
+        self.sort_column = "年月日"
+        self.sort_reverse = False
         self.search_results.sort(key=lambda x: (x['year'], x['month'], x['day'], x['col_index']))
         
         # 結果を表示
@@ -264,6 +328,9 @@ class SearchDialog(BaseDialog):
             values = [result['date'], result['column'], result['partner'],
                       result['amount'], result['detail']]
             self.result_tree.insert("", "end", values=values)
+        
+        # 列ヘッダーを更新
+        self._update_column_headers()
         
         # 結果カウンターを更新
         count = len(self.search_results)

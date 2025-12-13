@@ -25,7 +25,7 @@ class ChartDialog(BaseDialog):
         self.parent_app = parent_app
         self.current_column_index = -1  # -1: 総支出、-2: 総収入、1以上: 各項目
         
-        # 【追加】表示対象の年（デフォルトは現在の年）
+        # 表示対象の年（デフォルトは現在の年）
         self.target_year = parent_app.current_year
         
         self.figure = None
@@ -68,7 +68,7 @@ class ChartDialog(BaseDialog):
                                font=('Arial', 16, 'bold'), bg='#f0f0f0')
         title_label.pack(side=tk.LEFT)
 
-        # 【追加】年選択エリア（タイトルの右側）
+        # 年選択エリア（タイトルの右側）
         year_frame = tk.Frame(title_frame, bg='#f0f0f0')
         year_frame.pack(side=tk.RIGHT)
         
@@ -219,7 +219,7 @@ class ChartDialog(BaseDialog):
             ylabel = "金額 (円)"
             color = '#2196f3'
         
-        # 【修正】対象年の1月〜12月を0埋め（データがない月も0円として表示するため）
+        # 対象年の1月〜12月を0埋め（データがない月も0円として表示するため）
         for m in range(1, 13):
             d = date(self.target_year, m, 1)
             if d not in monthly_data:
@@ -296,7 +296,7 @@ class ChartDialog(BaseDialog):
                     month = int(parts[1])
                     day = int(parts[2])
                     
-                    # 【追加】年フィルタリング
+                    # 年フィルタリング
                     if year != self.target_year:
                         continue
                     
@@ -329,7 +329,7 @@ class ChartDialog(BaseDialog):
                     day = int(parts[2])
                     col_index = int(parts[3])
                     
-                    # 【追加】年フィルタリング
+                    # 年フィルタリング
                     if year != self.target_year:
                         continue
                     
@@ -357,7 +357,7 @@ class ChartDialog(BaseDialog):
                     day = int(parts[2])
                     col_index = int(parts[3])
                     
-                    # 【追加】年フィルタリング
+                    # 年フィルタリング
                     if year != self.target_year:
                         continue
                     

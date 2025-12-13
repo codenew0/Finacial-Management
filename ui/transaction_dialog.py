@@ -33,7 +33,7 @@ class TransactionDialog(BaseDialog):
         self.col_name = col_name
         self.entry_editor = None
         
-        # 【追加】自動補完用の変数
+        # 自動補完用の変数
         self.autocomplete_candidates = []  # 現在の候補リスト
         self.autocomplete_index = -1  # 現在の候補インデックス
         self.autocomplete_original_text = ""  # 元のテキスト
@@ -71,6 +71,12 @@ class TransactionDialog(BaseDialog):
         tree_container.grid_rowconfigure(0, weight=1)
         tree_container.grid_columnconfigure(0, weight=1)
         
+        style = ttk.Style()
+        style.map("Treeview",
+                  background=[('selected', '#0078d4')],
+                  foreground=[('selected', 'yellow')])
+
+
         # 取引データ編集用Treeview
         columns = ["支払先", "金額(円)", "メモ"]
         self.tree = ttk.Treeview(tree_container, columns=columns, show="headings", selectmode='extended')
@@ -99,6 +105,8 @@ class TransactionDialog(BaseDialog):
         self.tree.bind("<Control-c>", lambda e: self._copy_rows())
         self.tree.bind("<Control-v>", lambda e: self._paste_rows())
         self.tree.bind("<Delete>", lambda e: self._delete_row())
+        self.tree.bind("<space>", self._on_space_key)
+        self.tree.bind("<Tab>", self._on_tab_key)
         
         # ボタンコンテナ
         button_frame = tk.Frame(self, bg='#f0f0f0')
@@ -134,17 +142,31 @@ class TransactionDialog(BaseDialog):
         self.context_menu.add_command(label="行を削除 (Delete)", command=self._delete_row)
         
         # 使用方法のヒント
-        hint_label = tk.Label(self, text="使い方: ダブルクリックで編集、TABキーで自動補完、Shift+クリックで複数選択",
+        hint_label = tk.Label(self, text="使い方: ダブルクリック/SPACEで編集、TABで自動補完/次のセル移動、ENTERで確定",
                               font=('Arial', 10), fg='#666666', bg='#f0f0f0')
         hint_label.grid(row=3, column=0, pady=(5, 10))
         
-        # キーボードショートカット
-        self.bind('<Return>', lambda e: self._on_ok())
+        # キーボードショートカット - ENTERキーの処理を変更
+        self.bind('<Return>', self._on_enter_key)
         self.bind('<Escape>', lambda e: self.destroy())
         self.tree.bind("<MouseWheel>", self._on_mousewheel)
         
         # データを読み込む
         self.after(50, self._load_data)
+    
+    # ENTERキーの処理
+    def _on_enter_key(self, event):
+        """
+        ENTERキーが押された時の処理
+        - 編集中の場合: 編集を確定
+        - 編集中でない場合: OKボタンと同じ処理
+        """
+        if self.entry_editor:
+            # 編集中の場合は何もしない（エディタ自身のReturnイベントで処理）
+            return
+        else:
+            # 編集中でない場合はOK処理
+            self._on_ok()
     
     def _on_mousewheel(self, event):
         """マウスホイールによるスクロール処理"""
@@ -179,7 +201,7 @@ class TransactionDialog(BaseDialog):
         self.tree.selection_set(item_id)
         self.tree.see(item_id)
     
-    # 【追加】自動補完機能のメソッド群
+    # 自動補完機能のメソッド群
     def _get_autocomplete_candidates(self, text, col_idx):
         """
         入力テキストに基づいて自動補完候補を取得する
@@ -302,18 +324,33 @@ class TransactionDialog(BaseDialog):
         self.entry_editor.focus_set()
         self.entry_editor.select_range(0, tk.END)
         
-        # イベントバインド
-        self.entry_editor.bind("<Return>", lambda e: self._save_edit(item_id, col_idx))
-        # 【修正】TABキーは自動補完に使用し、フィールド移動はしない
+        # イベントバインド - ENTERキーで編集を確定し、イベント伝播を停止
+        self.entry_editor.bind("<Return>", lambda e: self._save_edit_and_stop(item_id, col_idx))
+        # TABキーは自動補完に使用し、フィールド移動はしない
         self.entry_editor.bind("<Tab>", lambda e: self._handle_autocomplete_tab(e, item_id, col_idx))
         self.entry_editor.bind("<FocusOut>", lambda e: self._save_edit(item_id, col_idx))
         self.entry_editor.bind("<Escape>", lambda e: self._cancel_edit())
         
-        # 【追加】テキスト変更時に自動補完状態をリセット（Combobox以外）
+        # テキスト変更時に自動補完状態をリセット（Combobox以外）
         if col_idx != 0:
             self.entry_editor.bind("<KeyRelease>", lambda e: self._on_text_change(e))
         
         self.tree.bind("<Button-1>", lambda e: self._save_edit(item_id, col_idx) if self.entry_editor else None, add=True)
+
+    def _save_edit_and_stop(self, item_id, col_idx):
+        """
+        エディターの内容を保存し、イベント伝播を停止する
+        
+        Args:
+            item_id: 編集中のアイテムID
+            col_idx: 列インデックス
+            
+        Returns:
+            str: "break"を返してイベント伝播を停止
+        """
+        self._save_edit(item_id, col_idx)
+        return "break"
+
     
     def _on_text_change(self, event):
         """
@@ -403,6 +440,86 @@ class TransactionDialog(BaseDialog):
         if messagebox.askyesno("確認", f"選択された {count} 件の行を削除しますか?"):
             for item in selected_items:
                 self.tree.delete(item)
+
+    def _on_space_key(self, event):
+        """
+        SPACEキーが押された時の処理
+        編集モードでない場合、選択中のセルを編集モードにする
+        
+        Returns:
+            str: "break"を返してデフォルトのSPACE動作を抑制
+        """
+        # 既に編集モードの場合は何もしない
+        if self.entry_editor:
+            return "break"
+        
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return "break"
+        
+        item_id = selected_items[0]
+        
+        # 現在フォーカスされている列を取得
+        # Treeviewのfocusとselectionだけでは列が分からないため、
+        # 最初の列（支払先）を編集する
+        col_id = "#1"  # 支払先列
+        
+        # ダブルクリックイベントを模擬
+        bbox = self.tree.bbox(item_id, col_id)
+        if bbox:
+            # 疑似イベントオブジェクトを作成
+            class FakeEvent:
+                def __init__(self, x, y):
+                    self.x = x
+                    self.y = y
+            
+            x, y, w, h = bbox
+            fake_event = FakeEvent(x + w//2, y + h//2)
+            self._on_double_click(fake_event)
+        
+        return "break"
+    
+    def _on_tab_key(self, event):
+        """
+        TABキーが押された時の処理
+        編集モードでない場合、次のセルに移動する
+        
+        Returns:
+            str: "break"を返してデフォルトのTAB動作を抑制
+        """
+        # 編集モードの場合は自動補完処理に任せる
+        if self.entry_editor:
+            return
+        
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return "break"
+        
+        current_item = selected_items[0]
+        all_items = self.tree.get_children()
+        
+        if not all_items:
+            return "break"
+        
+        # 現在のアイテムのインデックスを取得
+        try:
+            current_index = all_items.index(current_item)
+        except ValueError:
+            return "break"
+        
+        # 次のアイテムに移動
+        if current_index < len(all_items) - 1:
+            next_item = all_items[current_index + 1]
+        else:
+            # 最後の行の場合は最初の行に戻る
+            next_item = all_items[0]
+        
+        # 選択を更新
+        self.tree.selection_set(next_item)
+        self.tree.focus(next_item)
+        self.tree.see(next_item)
+        
+        return "break"
     
     def _copy_rows(self):
         """選択された行をコピーする"""
