@@ -1,5 +1,5 @@
 build/
 dist/
 __pycache__
-household_json/backups/
+household_json/
 *.spec
