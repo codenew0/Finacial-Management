@@ -402,14 +402,22 @@ class MainWindow:
     
     def _prev_year(self):
         """前年に移動する"""
-        self.current_year -= 1
+        self.current_month -= 1
+        if self.current_month < 1:
+            self.current_month = 12
+            self.current_year -= 1
         self.update_year_display()
+        self._update_month_buttons()
         self._show_month(self.current_month)
     
     def _next_year(self):
         """翌年に移動する"""
-        self.current_year += 1
+        self.current_month += 1
+        if self.current_month > 12:
+            self.current_month = 1
+            self.current_year += 1
         self.update_year_display()
+        self._update_month_buttons()
         self._show_month(self.current_month)
     
     def update_year_display(self):

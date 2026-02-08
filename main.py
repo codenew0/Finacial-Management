@@ -16,7 +16,7 @@ def check_single_instance():
     """
     # 任意のポート番号（他と被りにくい番号を使用）
     PORT = 54321
-    
+
     try:
         # ソケットを作成
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
