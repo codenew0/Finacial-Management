@@ -5,7 +5,7 @@
 import tkinter as tk
 from tkinter import ttk
 from ui.base_dialog import BaseDialog
-from config import DialogConfig, parse_amount
+from config import parse_amount
 
 
 class MonthlyDataDialog(BaseDialog):
@@ -242,32 +242,34 @@ class MonthlyDataDialog(BaseDialog):
                 self.result_tree.heading(col, text=col)
     
     def _highlight_duplicates(self):
-        """重複データを検出して薄い赤色でハイライトする"""
+        """重複データを検出して薄い赤色でハイライトする（最適化版）"""
         items = self.result_tree.get_children()
-        row_data_map = {}
+        seen_data = {}
         
+        # 1回のループで重複検出（2回ループを1回に削減して効率化）
         for item in items:
             values = self.result_tree.item(item, 'values')
-            if values:
-                data_tuple = tuple(str(v) for v in values[:5])
-                row_data_map[item] = data_tuple
-        
-        seen_data = {}
-        for item_id, data_tuple in row_data_map.items():
-            if data_tuple in seen_data:
-                seen_data[data_tuple].append(item_id)
+            if not values:
+                continue
+            
+            # タプルで直接比較（不要な文字列化を削減）
+            data_key = tuple(values[:5])
+            
+            if data_key in seen_data:
+                seen_data[data_key].append(item)
             else:
-                seen_data[data_tuple] = [item_id]
+                seen_data[data_key] = [item]
         
-        for data_tuple, item_ids in seen_data.items():
-            if len(item_ids) > 1:
-                for item_id in item_ids:
-                    current_tags = list(self.result_tree.item(item_id, 'tags'))
+        # 重複しているアイテムにタグを設定
+        for item_list in seen_data.values():
+            if len(item_list) > 1:
+                for item_id in item_list:
+                    current_tags = self.result_tree.item(item_id, 'tags')
                     
                     if isinstance(current_tags, str):
                         tag_list = [current_tags] if current_tags else []
                     else:
-                        tag_list = list(current_tags)
+                        tag_list = list(current_tags) if current_tags else []
 
                     # duplicateタグを追加
                     if "duplicate" not in tag_list:
@@ -366,4 +368,3 @@ class MonthlyDataDialog(BaseDialog):
 
         # データ件数を表示
         self.result_label.config(text=f"データ: {len(self.monthly_data)} 件")
-        

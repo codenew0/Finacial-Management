@@ -6,7 +6,6 @@
 import json
 import os
 import shutil
-from datetime import datetime
 
 
 class DataManager:
@@ -225,6 +224,12 @@ class DataManager:
                         old_format = self._convert_new_to_old_format(year, month, month_data.get("data", {}))
                         self.data.update(old_format)
                         
+                        # 読み込み時に支払先を抽出（効率化）
+                        for data_list in old_format.values():
+                            for row in data_list:
+                                if len(row) > 0 and row[0] and str(row[0]).strip():
+                                    self.transaction_partners.add(str(row[0]).strip())
+                        
                     except Exception as e:
                         print(f"データ読み込みエラー ({year}/{month}): {e}")
     
@@ -274,13 +279,15 @@ class DataManager:
             else:
                 data_dict = old_data.get("data", {})
             
-            # 既存データとマージ(既存優先)
+            # 既存データとマージ(既存優先) + 支払先の抽出を同時に実行
             for key, value in data_dict.items():
                 if key not in self.data:
                     self.data[key] = value
-            
-            # 支払先を抽出
-            self._extract_partners_from_data()
+                    
+                    # マージ時に支払先を抽出（効率化）
+                    for row in value:
+                        if len(row) > 0 and row[0] and str(row[0]).strip():
+                            self.transaction_partners.add(str(row[0]).strip())
             
         except Exception as e:
             print(f"data_1.json読み込みエラー: {e}")
@@ -563,10 +570,3 @@ class DataManager:
                 continue
         
         return results
-    
-    def _extract_partners_from_data(self):
-        """既存のデータから支払先を抽出して履歴に追加"""
-        for data_list in self.data.values():
-            for row in data_list:
-                if len(row) > 0 and row[0] and str(row[0]).strip():
-                    self.transaction_partners.add(str(row[0]).strip())

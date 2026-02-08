@@ -288,7 +288,7 @@ class SearchDialog(BaseDialog):
         
         # データマネージャーから検索
         results = self.parent_app.data_manager.search_transactions(search_text)
-        total_amount = 0 # 合計金額用
+        total_amount = 0  # 合計金額用（ループ内で計算して効率化）
         
         # 結果を整形
         all_columns = self.parent_app.get_all_columns()
@@ -301,7 +301,7 @@ class SearchDialog(BaseDialog):
             column_name = all_columns[col_index] if col_index < len(all_columns) else f"列{col_index}"
             date_str = f"{year}/{month:02d}/{day:02d}"
 
-            # 金額の加算
+            # 金額の加算（統計計算をループ内で実行して二重ループを回避・効率化）
             amount_val = parse_amount(result['amount'])
             total_amount += amount_val
             

@@ -38,6 +38,9 @@ class TransactionDialog(BaseDialog):
         self.autocomplete_index = -1  # 現在の候補インデックス
         self.autocomplete_original_text = ""  # 元のテキスト
         
+        # メモ候補をキャッシュ（初期化時に1回だけ収集・効率化）
+        self._memo_candidates_cache = None
+        
         # キーを解析して年月日と列インデックスを取得
         parts = dict_key.split("-")
         if len(parts) == 4:
@@ -223,22 +226,28 @@ class TransactionDialog(BaseDialog):
             all_partners = self.parent_app.data_manager.get_transaction_partners_list()
             candidates = [p for p in all_partners if p.lower().startswith(text_lower)]
         elif col_idx == 2:  # メモ列
-            # 過去のメモから候補を取得
-            all_memos = self._get_all_memos()
+            # キャッシュされたメモ候補を使用（効率化）
+            all_memos = self._get_memo_candidates()
             candidates = [m for m in all_memos if m.lower().startswith(text_lower)]
         else:
             candidates = []
         
         return sorted(candidates)
     
-    def _get_all_memos(self):
-        """全取引データからメモを収集する"""
+    def _collect_all_memos(self):
+        """全取引データからメモを収集する（初期化時に1回だけ実行・効率化）"""
         memos = set()
         for data_list in self.parent_app.data_manager.data.values():
             for row in data_list:
                 if len(row) >= 3 and row[2] and str(row[2]).strip():
                     memos.add(str(row[2]).strip())
         return sorted(list(memos))
+    
+    def _get_memo_candidates(self):
+        """メモ候補を取得（キャッシュを使用）"""
+        if self._memo_candidates_cache is None:
+            self._memo_candidates_cache = self._collect_all_memos()
+        return self._memo_candidates_cache
     
     def _handle_autocomplete_tab(self, event, item_id, col_idx):
         """
