@@ -46,6 +46,17 @@ class MainWindow:
         # コピペ用：選択された列のIDを保持
         self.selected_column_id = None
         
+        # 範囲選択用
+        self.selection_start_row = None  # 範囲選択の開始行
+        self.selection_start_col = None  # 範囲選択の開始列
+        
+        # Ctrl選択用：個別に選択されたセル [(row_id, col_id), ...]
+        self.ctrl_selected_cells = []
+        
+        # 元に戻す機能用
+        self.undo_stack = []  # 操作履歴 [(action_type, data), ...]
+        self.max_undo_count = 50  # 最大保持数
+        
         # 月選択ボタンのリスト
         self.month_buttons = []
         self.current_month_button = None
@@ -64,8 +75,11 @@ class MainWindow:
         self.root.bind('<Control-f>', lambda e: SearchDialog(self.root, self))
 
         # コピー＆ペーストのショートカット
-        self.root.bind('<Control-c>', self._copy_cell)
-        self.root.bind('<Control-v>', self._paste_cell)
+        self.root.bind('<Control-c>', self._copy_cells)
+        self.root.bind('<Control-x>', self._cut_cells)
+        self.root.bind('<Control-v>', self._paste_cells)
+        self.root.bind('<Delete>', self._delete_cells)
+        self.root.bind('<Control-z>', self._undo)
     
     def _get_color_theme(self):
         """カラーテーマを取得"""
@@ -227,22 +241,28 @@ class MainWindow:
         
         # 前年ボタン
         ttk.Button(year_nav, text="◀", width=3, style='Nav.TButton',
-                   command=self._prev_year).pack(side=tk.LEFT, padx=(0, 4))
+                command=self._prev_month).pack(side=tk.LEFT, padx=(0, 4))
         
-        # 年表示
-        year_display = tk.Frame(year_nav, bg=self.colors['bg_tertiary'])
+        # 年表示（クリックでダイアログ表示）
+        year_display = tk.Frame(year_nav, bg=self.colors['bg_tertiary'], 
+                                cursor='hand2')
         year_display.pack(side=tk.LEFT, padx=4)
         
         self.year_label = tk.Label(year_display, text=str(self.current_year),
-                                   font=FontConfig.TITLE,
-                                   bg=self.colors['bg_tertiary'],
-                                   fg=self.colors['text_primary'],
-                                   padx=12, pady=4)
+                                font=FontConfig.TITLE,
+                                bg=self.colors['bg_tertiary'],
+                                fg=self.colors['text_primary'],
+                                padx=12, pady=4,
+                                cursor='hand2')
         self.year_label.pack()
+        
+        # クリックでダイアログを表示
+        self.year_label.bind('<Button-1>', self._open_year_input_dialog)
+        year_display.bind('<Button-1>', self._open_year_input_dialog)
         
         # 翌年ボタン
         ttk.Button(year_nav, text="▶", width=3, style='Nav.TButton',
-                   command=self._next_year).pack(side=tk.LEFT, padx=(4, 0))
+                command=self._next_month).pack(side=tk.LEFT, padx=(4, 0))
     
     def _create_month_buttons(self, parent):
         """月選択ボタンを作成"""
@@ -376,6 +396,104 @@ class MainWindow:
         
         # ツールチップを初期化
         self.tooltip = TreeviewTooltip(self.tree, self)
+
+    def _open_year_input_dialog(self, event=None):
+        """年入力ダイアログを開く"""
+        # ダイアログを作成
+        dialog = tk.Toplevel(self.root)
+        dialog.title("年を入力")
+        dialog.resizable(False, False)
+        
+        # ダイアログのサイズと位置
+        dialog_width = 300
+        dialog_height = 150
+        
+        # 親ウィンドウの中央に配置
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_width) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_height) // 2
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+        
+        # モーダルダイアログに設定
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # 背景色
+        dialog.configure(bg='#f0f0f0')
+        
+        # タイトル
+        title_label = tk.Label(dialog, text="移動する年を入力してください",
+                            font=('Arial', 12, 'bold'),
+                            bg='#f0f0f0')
+        title_label.pack(pady=(20, 10))
+        
+        # 入力フレーム
+        input_frame = tk.Frame(dialog, bg='#f0f0f0')
+        input_frame.pack(pady=10)
+        
+        # ラベル
+        tk.Label(input_frame, text="年:", font=('Arial', 11),
+                bg='#f0f0f0').pack(side=tk.LEFT, padx=(0, 10))
+        
+        # テキストボックス
+        year_entry = tk.Entry(input_frame, font=('Arial', 14),
+                            width=10, justify='center')
+        year_entry.pack(side=tk.LEFT)
+        year_entry.insert(0, str(self.current_year))
+        year_entry.select_range(0, tk.END)
+        year_entry.focus_set()
+        
+        # ボタンフレーム
+        button_frame = tk.Frame(dialog, bg='#f0f0f0')
+        button_frame.pack(pady=(10, 20))
+        
+        def on_ok():
+            """OKボタンの処理"""
+            try:
+                new_year = int(year_entry.get().strip())
+                
+                # 妥当な範囲かチェック
+                if 1900 <= new_year <= 2100:
+                    self.current_year = new_year
+                    self.update_year_display()
+                    self._update_month_buttons()
+                    self._show_month(self.current_month)
+                    dialog.destroy()
+                else:
+                    messagebox.showwarning("警告",
+                                        "年は1900～2100の範囲で入力してください。",
+                                        parent=dialog)
+                    year_entry.select_range(0, tk.END)
+                    year_entry.focus_set()
+            except ValueError:
+                messagebox.showwarning("警告",
+                                    "正しい年数を入力してください。",
+                                    parent=dialog)
+                year_entry.select_range(0, tk.END)
+                year_entry.focus_set()
+        
+        def on_cancel():
+            """キャンセルボタンの処理"""
+            dialog.destroy()
+        
+        # OKボタン
+        ok_button = tk.Button(button_frame, text="OK", font=('Arial', 11),
+                            bg='#2196f3', fg='white',
+                            width=10, command=on_ok)
+        ok_button.pack(side=tk.LEFT, padx=5)
+        
+        # キャンセルボタン
+        cancel_button = tk.Button(button_frame, text="キャンセル",
+                                font=('Arial', 11),
+                                bg='#f44336', fg='white',
+                                width=10, command=on_cancel)
+        cancel_button.pack(side=tk.LEFT, padx=5)
+        
+        # Enterキーでも確定できるようにする
+        year_entry.bind('<Return>', lambda e: on_ok())
+        year_entry.bind('<KP_Enter>', lambda e: on_ok())  # テンキーのEnter
+        
+        # Escapeキーでキャンセル
+        dialog.bind('<Escape>', lambda e: on_cancel())
     
     def _configure_treeview_style(self):
         """Treeviewのスタイルを設定"""
@@ -400,8 +518,8 @@ class MainWindow:
                   background=[('selected', '#0078d4')],
                   foreground=[('selected', 'yellow')])
     
-    def _prev_year(self):
-        """前年に移動する"""
+    def _prev_month(self):
+        """前月に移動する"""
         self.current_month -= 1
         if self.current_month < 1:
             self.current_month = 12
@@ -410,8 +528,8 @@ class MainWindow:
         self._update_month_buttons()
         self._show_month(self.current_month)
     
-    def _next_year(self):
-        """翌年に移動する"""
+    def _next_month(self):
+        """翌月に移動する"""
         self.current_month += 1
         if self.current_month > 12:
             self.current_month = 1
@@ -583,8 +701,39 @@ class MainWindow:
 
         # クリックされた列IDを取得して保存（コピー＆ペースト用）
         col_id = self.tree.identify_column(event.x)
+        row_id = self.tree.identify_row(event.y)
+        
         if col_id:
             self.selected_column_id = col_id
+        
+        # Shift+クリックの場合は範囲選択
+        if event.state & 0x1 and row_id and col_id:  # Shiftキー
+            if self.selection_start_row and self.selection_start_col:
+                # 範囲選択を実行
+                self._select_range(self.selection_start_row, self.selection_start_col, row_id, col_id)
+                # Ctrl選択リストをクリア
+                self.ctrl_selected_cells = []
+                return
+        
+        # Ctrl+クリックの場合は個別選択モード
+        if event.state & 0x4 and row_id and col_id:  # Ctrlキー
+            # このセルをCtrl選択リストに追加（重複チェック）
+            cell_tuple = (row_id, col_id)
+            if cell_tuple in self.ctrl_selected_cells:
+                # 既に選択されている場合は削除（トグル）
+                self.ctrl_selected_cells.remove(cell_tuple)
+            else:
+                # 新規追加
+                self.ctrl_selected_cells.append(cell_tuple)
+            return
+        
+        # 通常のクリック（Shift/Ctrl押下なし）の場合
+        if row_id and col_id:
+            # 範囲選択の開始点を記録
+            self.selection_start_row = row_id
+            self.selection_start_col = col_id
+            # Ctrl選択リストをクリア
+            self.ctrl_selected_cells = [(row_id, col_id)]
 
         if region == "heading":
             if col_id:
@@ -593,6 +742,44 @@ class MainWindow:
                 
                 if col_index == len(all_columns):  # +ボタン列
                     self._add_column()
+    
+    def _select_range(self, start_row_id, start_col_id, end_row_id, end_col_id):
+        """
+        開始セルと終了セルの間の矩形範囲を選択する
+        
+        Args:
+            start_row_id: 開始行ID
+            start_col_id: 開始列ID（"#1", "#2"など）
+            end_row_id: 終了行ID
+            end_col_id: 終了列ID
+        """
+        items = self.tree.get_children()
+        
+        # 行のインデックスを取得
+        try:
+            start_row_idx = items.index(start_row_id)
+            end_row_idx = items.index(end_row_id)
+        except ValueError:
+            return
+        
+        # 列のインデックスを取得
+        start_col_idx = int(start_col_id[1:]) - 1
+        end_col_idx = int(end_col_id[1:]) - 1
+        
+        # 開始と終了を正規化（小さい方が先）
+        if start_row_idx > end_row_idx:
+            start_row_idx, end_row_idx = end_row_idx, start_row_idx
+        if start_col_idx > end_col_idx:
+            start_col_idx, end_col_idx = end_col_idx, start_col_idx
+        
+        # 範囲内のすべての行を選択
+        selected_rows = []
+        for i in range(start_row_idx, end_row_idx + 1):
+            if i < len(items):
+                selected_rows.append(items[i])
+        
+        # Treeviewの選択を更新
+        self.tree.selection_set(selected_rows)
     
     def _on_double_click(self, event):
         """ダブルクリックイベントを処理する"""
@@ -679,10 +866,13 @@ class MainWindow:
                 
                 # コンテキストメニュー作成
                 cell_menu = tk.Menu(self.root, tearoff=0)
-                cell_menu.add_command(label="コピー (Ctrl+C)", command=self._copy_cell)
-                cell_menu.add_command(label="貼り付け (Ctrl+V)", command=self._paste_cell)
+                cell_menu.add_command(label="元に戻す (Ctrl+Z)", command=self._undo)
                 cell_menu.add_separator()
-                cell_menu.add_command(label="削除 (Delete)", command=self._delete_cell)
+                cell_menu.add_command(label="切り取り (Ctrl+X)", command=self._cut_cells)
+                cell_menu.add_command(label="コピー (Ctrl+C)", command=self._copy_cells)
+                cell_menu.add_command(label="貼り付け (Ctrl+V)", command=self._paste_cells)
+                cell_menu.add_separator()
+                cell_menu.add_command(label="削除 (Delete)", command=self._delete_cells)
                 cell_menu.post(event.x_root, event.y_root)
             return
         
@@ -984,158 +1174,446 @@ class MainWindow:
             # 合計とまとめ行を再計算
             self._update_totals()
 
-    def _copy_cell(self, event=None):
+    def _get_selected_cells(self):
         """
-        選択されているセルの詳細データをJSON形式でクリップボードにコピー
-        データがない場合は表示上の値をコピー
+        現在選択されているセルの情報を取得
+        
+        Shift選択の場合：矩形範囲内のすべてのセル
+        Ctrl選択の場合：個別に選択されたセルのみ
+        通常選択：現在の行と列
+        
+        Returns:
+            list: [(row_id, col_id, day, col_idx), ...]
         """
-        selected_item = self.tree.selection()
-        if not selected_item or not self.selected_column_id:
-            return
-            
-        col_idx = int(self.selected_column_id[1:]) - 1
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return []
+        
+        cells = []
+        items = self.tree.get_children()
+        total_row_id = items[-2] if len(items) >= 2 else None
+        summary_row_id = items[-1] if len(items) >= 1 else None
         all_columns = self.get_all_columns()
         
-        # 範囲チェック
-        if col_idx <= 0 or col_idx >= len(all_columns):
-            return
-
-        row_id = selected_item[0]
-        items = self.tree.get_children()
-        summary_row_id = items[-1] # まとめ行
-
-        # 日付(day)を特定
-        row_vals = self.tree.item(row_id, 'values')
-        day = 0
-        if row_id != summary_row_id:
-            try:
-                day = int(str(row_vals[0]).strip())
-            except ValueError:
-                return # 日付が取得できない行は無視
-
-        # 内部データを取得
-        dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_idx}"
-        data_list = self.data_manager.get_transaction_data(dict_key)
-
-        self.root.clipboard_clear()
-
-        if data_list:
-            # 詳細データがある場合、JSON文字列としてコピー
-            json_str = json.dumps(data_list, ensure_ascii=False)
-            self.root.clipboard_append(json_str)
+        # Ctrl選択の場合：個別に記録されたセルを使用
+        if self.ctrl_selected_cells and len(self.ctrl_selected_cells) > 1:
+            for row_id, col_id in self.ctrl_selected_cells:
+                # 合計行はスキップ
+                if row_id == total_row_id:
+                    continue
+                
+                col_idx = int(col_id[1:]) - 1
+                
+                # 範囲チェック
+                if col_idx <= 0 or col_idx >= len(all_columns):
+                    continue
+                
+                # まとめ行の場合、収入列のみ許可
+                if row_id == summary_row_id:
+                    if col_idx == 3:
+                        cells.append((row_id, col_id, 0, 3))
+                    continue
+                
+                # 日付を取得
+                row_vals = self.tree.item(row_id, 'values')
+                try:
+                    day = int(str(row_vals[0]).strip())
+                except ValueError:
+                    continue
+                
+                cells.append((row_id, col_id, day, col_idx))
+            
+            return cells
+        
+        # 範囲選択の場合（複数行が選択され、開始列が記録されている）
+        if len(selected_items) > 1 and self.selection_start_col and self.selected_column_id:
+            # 列の範囲を決定
+            start_col_idx = int(self.selection_start_col[1:]) - 1
+            end_col_idx = int(self.selected_column_id[1:]) - 1
+            
+            # 正規化（小さい方が先）
+            if start_col_idx > end_col_idx:
+                start_col_idx, end_col_idx = end_col_idx, start_col_idx
+            
+            # 範囲内のすべてのセルを追加
+            for row_id in selected_items:
+                # 合計行はスキップ
+                if row_id == total_row_id:
+                    continue
+                
+                # 日付を取得
+                row_vals = self.tree.item(row_id, 'values')
+                
+                if row_id == summary_row_id:
+                    # まとめ行は収入列(3)のみ
+                    if start_col_idx <= 3 <= end_col_idx:
+                        cells.append((row_id, "#4", 0, 3))
+                    continue
+                
+                try:
+                    day = int(str(row_vals[0]).strip())
+                except ValueError:
+                    continue
+                
+                # 列の範囲内のすべてのセルを追加
+                for col_idx in range(start_col_idx, end_col_idx + 1):
+                    # 日付列と+列をスキップ
+                    if col_idx <= 0 or col_idx >= len(all_columns):
+                        continue
+                    
+                    col_id = f"#{col_idx + 1}"
+                    cells.append((row_id, col_id, day, col_idx))
+        
         else:
-            # データはないが表示値がある場合（稀なケース）、テキストのみコピー
-            val = str(row_vals[col_idx]).strip()
-            if val:
-                self.root.clipboard_append(val)
+            # 単一セルの場合
+            for row_id in selected_items:
+                # 合計行はスキップ
+                if row_id == total_row_id:
+                    continue
+                
+                # 列IDがない場合はスキップ
+                if not self.selected_column_id:
+                    continue
+                
+                col_idx = int(self.selected_column_id[1:]) - 1
+                
+                # 範囲チェック
+                if col_idx <= 0 or col_idx >= len(all_columns):
+                    continue
+                
+                # まとめ行の場合、収入列のみ許可
+                if row_id == summary_row_id and col_idx != 3:
+                    continue
+                
+                # 日付を取得
+                row_vals = self.tree.item(row_id, 'values')
+                if row_id == summary_row_id:
+                    day = 0
+                    col_idx = 3  # 収入列
+                else:
+                    try:
+                        day = int(str(row_vals[0]).strip())
+                    except ValueError:
+                        continue
+                
+                cells.append((row_id, self.selected_column_id, day, col_idx))
         
-        self.root.update()
-
-    def _paste_cell(self, event=None):
+        return cells
+    
+    def _copy_cells(self, event=None):
         """
-        クリップボードの値をセルに貼り付け
-        JSON形式なら詳細ごと復元、数値なら新規取引として追加
+        選択されたセルをコピー（確認なし）
         """
-        selected_item = self.tree.selection()
-        if not selected_item or not self.selected_column_id:
+        cells = self._get_selected_cells()
+        if not cells:
             return
         
+        # データを収集
+        copy_data = []
+        for row_id, col_id, day, col_idx in cells:
+            dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_idx}"
+            data_list = self.data_manager.get_transaction_data(dict_key)
+            
+            # セルの位置情報と合わせて保存
+            row_vals = self.tree.item(row_id, 'values')
+            copy_data.append({
+                'day': day,
+                'col_idx': col_idx,
+                'data': data_list if data_list else [],
+                'display_value': str(row_vals[col_idx]).strip() if col_idx < len(row_vals) else ""
+            })
+        
+        # JSON形式でクリップボードに保存
+        self.root.clipboard_clear()
+        if copy_data:
+            json_str = json.dumps(copy_data, ensure_ascii=False)
+            self.root.clipboard_append(json_str)
+            self.root.update()
+    
+    def _cut_cells(self, event=None):
+        """
+        選択されたセルを切り取り（確認なし）
+        """
+        cells = self._get_selected_cells()
+        if not cells:
+            return
+        
+        # Undo用に操作前の状態を保存
+        undo_data = []
+        for row_id, col_id, day, col_idx in cells:
+            dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_idx}"
+            old_data = self.data_manager.get_transaction_data(dict_key)
+            undo_data.append((dict_key, old_data[:] if old_data else None))
+        
+        self._save_undo_state('cut', undo_data)
+        
+        # まずコピー
+        self._copy_cells()
+        
+        # 次に削除
+        for row_id, col_id, day, col_idx in cells:
+            dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_idx}"
+            self.data_manager.delete_transaction_data(dict_key)
+            
+            # UI更新
+            self.update_parent_cell(f"{self.current_year}-{self.current_month}-{day}", col_idx, "")
+    
+    def _paste_cells(self, event=None):
+        """
+        クリップボードの内容をセルに貼り付け（確認なし）
+        相対位置を保持したまま貼り付け
+        
+        貼り付け先：選択されたセルのうち、最も左上（行最小、列最小）のセルを基準とする
+        """
         try:
             clipboard_text = self.root.clipboard_get()
         except tk.TclError:
             return
-
-        # ターゲット位置の特定
-        row_id = selected_item[0]
-        col_idx = int(self.selected_column_id[1:]) - 1
+        
+        # 貼り付け先のセルを取得
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return
+        
+        # 選択されたすべてのセルの中で最も左上のセルを見つける
+        items = self.tree.get_children()
+        summary_row_id = items[-1] if len(items) >= 1 else None
         all_columns = self.get_all_columns()
         
-        items = self.tree.get_children()
-        total_row_id = items[-2]
-        summary_row_id = items[-1]
-
-        # 禁止エリア判定
-        if row_id == total_row_id: return
-        if row_id == summary_row_id and col_idx != 3: return
-        if col_idx <= 0 or col_idx >= len(all_columns): return
-
-        # 日付(day)を特定
-        row_vals = self.tree.item(row_id, 'values')
-        day = 0
-        if row_id != summary_row_id:
-            try:
-                day = int(str(row_vals[0]).strip())
-            except ValueError:
+        base_day = None
+        base_col_idx = None
+        
+        # Ctrl選択の場合
+        if self.ctrl_selected_cells and len(self.ctrl_selected_cells) >= 1:
+            min_row_idx = float('inf')
+            min_col_idx = float('inf')
+            selected_row_id = None
+            
+            for row_id, col_id in self.ctrl_selected_cells:
+                try:
+                    row_idx = items.index(row_id)
+                    col_idx = int(col_id[1:]) - 1
+                    
+                    # より上（行インデックスが小さい）、または同じ行でより左（列インデックスが小さい）
+                    if row_idx < min_row_idx or (row_idx == min_row_idx and col_idx < min_col_idx):
+                        min_row_idx = row_idx
+                        min_col_idx = col_idx
+                        selected_row_id = row_id
+                        base_col_idx = col_idx
+                except (ValueError, IndexError):
+                    continue
+            
+            if selected_row_id:
+                row_vals = self.tree.item(selected_row_id, 'values')
+                if selected_row_id == summary_row_id:
+                    base_day = 0
+                    base_col_idx = 3  # 収入列
+                else:
+                    try:
+                        base_day = int(str(row_vals[0]).strip())
+                    except ValueError:
+                        return
+        
+        # 範囲選択またはその他の場合
+        if base_day is None or base_col_idx is None:
+            # 選択された行の中で最も上の行を見つける
+            min_row_idx = float('inf')
+            selected_row_id = None
+            
+            for row_id in selected_items:
+                try:
+                    row_idx = items.index(row_id)
+                    if row_idx < min_row_idx:
+                        min_row_idx = row_idx
+                        selected_row_id = row_id
+                except ValueError:
+                    continue
+            
+            if not selected_row_id:
                 return
-
-        # 上書き確認
-        current_val = str(row_vals[col_idx]).strip() if col_idx < len(row_vals) else ""
-        if current_val and current_val != "0":
-             if not messagebox.askyesno("確認", "既存のデータが存在します。\n上書きして貼り付けますか？"):
-                 return
-
-        dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_idx}"
-        new_data_list = []
-
-        # 1. JSON（詳細データ）として解析を試みる
+            
+            # 列の決定
+            if self.selection_start_col and self.selected_column_id:
+                # 範囲選択の場合、開始列と終了列の小さい方
+                start_col_idx = int(self.selection_start_col[1:]) - 1
+                end_col_idx = int(self.selected_column_id[1:]) - 1
+                base_col_idx = min(start_col_idx, end_col_idx)
+            elif self.selected_column_id:
+                # 単一選択の場合
+                base_col_idx = int(self.selected_column_id[1:]) - 1
+            else:
+                return
+            
+            # 日付を取得
+            row_vals = self.tree.item(selected_row_id, 'values')
+            if selected_row_id == summary_row_id:
+                base_day = 0
+                base_col_idx = 3  # 収入列
+            else:
+                try:
+                    base_day = int(str(row_vals[0]).strip())
+                except ValueError:
+                    return
+        
+        # JSON形式のデータを解析
         try:
-            parsed_data = json.loads(clipboard_text)
-            if isinstance(parsed_data, list):
-                # データの形式チェック（リストのリストであることを期待）
-                new_data_list = parsed_data
+            paste_data = json.loads(clipboard_text)
+            if not isinstance(paste_data, list):
+                return
         except json.JSONDecodeError:
-            pass
-
-        # 2. JSONでなければ、単一の数値として解析（Excel等からのコピペ用）
-        if not new_data_list:
+            # JSON形式でない場合は、単一セルとして扱う
             amount = parse_amount(clipboard_text)
             if amount != 0 or "0" in clipboard_text:
+                # Undo用に操作前の状態を保存
+                dict_key = f"{self.current_year}-{self.current_month}-{base_day}-{base_col_idx}"
+                old_data = self.data_manager.get_transaction_data(dict_key)
+                self._save_undo_state('paste', [(dict_key, old_data[:] if old_data else None)])
+                
                 new_data_list = [("貼付入力", str(amount), "")]
-        
-        # データがあれば保存して反映
-        if new_data_list:
-            self.data_manager.set_transaction_data(dict_key, new_data_list)
-            
-            # 合計金額を計算してUI更新
-            total = sum(parse_amount(row[1]) for row in new_data_list if len(row) > 1)
-            self.update_parent_cell(f"{self.current_year}-{self.current_month}-{day}", col_idx, str(total))
-            
-    def _delete_cell(self):
-        """選択されたセルのデータを削除する"""
-        selected_item = self.tree.selection()
-        if not selected_item or not self.selected_column_id:
+                
+                # 既存データの確認（上書き）
+                self.data_manager.set_transaction_data(dict_key, new_data_list)
+                total = sum(parse_amount(row[1]) for row in new_data_list if len(row) > 1)
+                self.update_parent_cell(f"{self.current_year}-{self.current_month}-{base_day}", base_col_idx, str(total))
             return
-
-        row_id = selected_item[0]
-        col_idx = int(self.selected_column_id[1:]) - 1
-        all_columns = self.get_all_columns()
         
-        # 編集不可エリアのチェック
-        items = self.tree.get_children()
-        total_row_id = items[-2]
-        summary_row_id = items[-1]
-        
-        if row_id == total_row_id: return
-        if row_id == summary_row_id and col_idx != 3: return
-        if col_idx <= 0 or col_idx >= len(all_columns): return
-
-        # 確認ダイアログ
-        if not messagebox.askyesno("確認", "選択されたセルのデータを削除しますか？"):
+        # 複数セルの貼り付け：各セルの相対位置を保持
+        if paste_data:
+            # コピー元の最小の日と列を見つける（基準点）
+            min_day = min(cell['day'] for cell in paste_data)
+            min_col = min(cell['col_idx'] for cell in paste_data)
+            
+            days_in_month = self.get_days_in_month()
+            
+            # Undo用に影響を受けるすべてのセルの元データを保存
+            undo_data = []
+            
+            # 各セルを貼り付け
+            for cell_data in paste_data:
+                # 元のセルの基準点からの相対位置を計算
+                day_offset = cell_data['day'] - min_day
+                col_offset = cell_data['col_idx'] - min_col
+                
+                # 貼り付け先の位置を計算
+                target_day = base_day + day_offset
+                target_col_idx = base_col_idx + col_offset
+                
+                # 範囲チェック
+                if target_day < 0 or (target_day > days_in_month and target_day != 0):
+                    continue
+                if target_col_idx <= 0 or target_col_idx >= len(all_columns):
+                    continue
+                
+                # Undo用に元のデータを保存
+                dict_key = f"{self.current_year}-{self.current_month}-{target_day}-{target_col_idx}"
+                old_data = self.data_manager.get_transaction_data(dict_key)
+                undo_data.append((dict_key, old_data[:] if old_data else None))
+                
+                # データを貼り付け
+                new_data = cell_data.get('data', [])
+                
+                if new_data:
+                    self.data_manager.set_transaction_data(dict_key, new_data)
+                    total = sum(parse_amount(row[1]) for row in new_data if len(row) > 1)
+                    self.update_parent_cell(f"{self.current_year}-{self.current_month}-{target_day}", target_col_idx, str(total))
+            
+            # Undo履歴に保存
+            if undo_data:
+                self._save_undo_state('paste', undo_data)
+    
+    def _delete_cells(self, event=None):
+        """
+        選択されたセルを削除（確認なし）
+        """
+        cells = self._get_selected_cells()
+        if not cells:
             return
-
-        # 日付を取得
-        row_vals = self.tree.item(row_id, 'values')
-        day = 0
-        if row_id != summary_row_id:
-            try:
-                day = int(str(row_vals[0]).strip())
-            except ValueError:
-                return
-
-        # データを削除
-        dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_idx}"
-        self.data_manager.delete_transaction_data(dict_key)
         
-        # UI更新（空文字にする）
-        self.update_parent_cell(f"{self.current_year}-{self.current_month}-{day}", col_idx, "")
+        # Undo用に操作前の状態を保存
+        undo_data = []
+        for row_id, col_id, day, col_idx in cells:
+            dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_idx}"
+            old_data = self.data_manager.get_transaction_data(dict_key)
+            undo_data.append((dict_key, old_data[:] if old_data else None))
         
+        self._save_undo_state('delete', undo_data)
+        
+        for row_id, col_id, day, col_idx in cells:
+            dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_idx}"
+            self.data_manager.delete_transaction_data(dict_key)
+            
+            # UI更新
+            self.update_parent_cell(f"{self.current_year}-{self.current_month}-{day}", col_idx, "")
+
+    def _save_undo_state(self, action_type, cells_data):
+        """
+        操作前の状態をundo stackに保存
+        
+        Args:
+            action_type: 'cut', 'paste', 'delete'のいずれか
+            cells_data: [(dict_key, old_data), ...] の形式
+        """
+        undo_entry = {
+            'action': action_type,
+            'cells': cells_data,
+            'year': self.current_year,
+            'month': self.current_month
+        }
+        
+        self.undo_stack.append(undo_entry)
+        
+        # 最大保持数を超えたら古いものから削除
+        if len(self.undo_stack) > self.max_undo_count:
+            self.undo_stack.pop(0)
+    
+    def _undo(self, event=None):
+        """
+        最後の操作を元に戻す (Ctrl+Z)
+        """
+        if not self.undo_stack:
+            return
+        
+        undo_entry = self.undo_stack.pop()
+        action = undo_entry['action']
+        cells = undo_entry['cells']
+        year = undo_entry['year']
+        month = undo_entry['month']
+        
+        # 年月が異なる場合は表示を切り替え
+        if self.current_year != year or self.current_month != month:
+            self.current_year = year
+            self.current_month = month
+            self.update_year_display()
+            self._update_month_buttons()
+            self._show_month(self.current_month)
+        
+        if action == 'cut' or action == 'delete':
+            # 切り取り/削除の取り消し：データを復元
+            for dict_key, old_data in cells:
+                if old_data:
+                    self.data_manager.set_transaction_data(dict_key, old_data)
+                    # UI更新
+                    parts = dict_key.split('-')
+                    if len(parts) == 4:
+                        y, m, d, col_idx = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])
+                        total = sum(parse_amount(row[1]) for row in old_data if len(row) > 1)
+                        self.update_parent_cell(f"{y}-{m}-{d}", col_idx, str(total))
+        
+        elif action == 'paste':
+            # 貼り付けの取り消し：貼り付けたデータを削除し、元のデータを復元
+            for dict_key, old_data in cells:
+                if old_data is None:
+                    # 元々データがなかった場合は削除
+                    self.data_manager.delete_transaction_data(dict_key)
+                    parts = dict_key.split('-')
+                    if len(parts) == 4:
+                        y, m, d, col_idx = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])
+                        self.update_parent_cell(f"{y}-{m}-{d}", col_idx, "")
+                else:
+                    # 元のデータがあった場合は復元
+                    self.data_manager.set_transaction_data(dict_key, old_data)
+                    parts = dict_key.split('-')
+                    if len(parts) == 4:
+                        y, m, d, col_idx = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])
+                        total = sum(parse_amount(row[1]) for row in old_data if len(row) > 1)
+                        self.update_parent_cell(f"{y}-{m}-{d}", col_idx, str(total))
