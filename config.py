@@ -9,9 +9,6 @@ from datetime import datetime
 # =====================================================
 # ファイルパス設定
 # =====================================================
-# =====================================================
-# ファイルパス設定
-# =====================================================
 def get_app_path():
     """
     実行環境に応じたアプリケーションのルートパスを取得する
@@ -29,8 +26,12 @@ SCRIPT_DIR = get_app_path()
 
 # JSONファイルをスクリプトと同じディレクトリに保存
 JSON_DIR = os.path.join(SCRIPT_DIR, "household_json")
-DATA_FILE = os.path.join(JSON_DIR, "data.json")
+DATA_FILE = os.path.join(JSON_DIR, "data.json")  # 旧フォーマット用（読み込み専用）
+DATA_FILE_OLD = os.path.join(JSON_DIR, "data_1.json")  # 旧フォーマットのバックアップ
 SETTINGS_FILE = os.path.join(JSON_DIR, "settings.json")
+
+# 新しいフォルダ構造のルートディレクトリ
+DATA_ROOT_DIR = os.path.join(JSON_DIR, "data")
 
 # =====================================================
 # アプリケーションバージョン
