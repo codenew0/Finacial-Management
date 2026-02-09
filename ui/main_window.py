@@ -846,7 +846,20 @@ class MainWindow:
         
         # 取引詳細ダイアログを開く
         dict_key = f"{self.current_year}-{self.current_month}-{day}-{col_index}"
-        TransactionDialog(self.root, self, dict_key, col_name)
+        
+        # ダイアログを開く前にデータを保存
+        old_data = self.data_manager.get_transaction_data(dict_key)
+        
+        # ダイアログを開く
+        dialog = TransactionDialog(self.root, self, dict_key, col_name)
+        
+        # ダイアログが閉じた後、データが変更されていれば元に戻すスタックに保存
+        self.root.wait_window(dialog)
+        new_data = self.data_manager.get_transaction_data(dict_key)
+        
+        # データが変更されていれば記録
+        if old_data != new_data:
+            self._save_undo_state('edit_detail', [(dict_key, old_data[:] if old_data else None)])
     
     def _on_right_click(self, event):
         """右クリックイベントを処理する"""
@@ -1479,47 +1492,77 @@ class MainWindow:
         
         # 複数セルの貼り付け：各セルの相対位置を保持
         if paste_data:
-            # コピー元の最小の日と列を見つける（基準点）
-            min_day = min(cell['day'] for cell in paste_data)
-            min_col = min(cell['col_idx'] for cell in paste_data)
+            # データ形式を判定
+            is_detail_window_data = False
+            if paste_data and isinstance(paste_data[0], list):
+                # 詳細入力ウィンドウからのデータ形式: [["支払先", "金額", "メモ"], ...]
+                is_detail_window_data = True
             
-            days_in_month = self.get_days_in_month()
-            
-            # Undo用に影響を受けるすべてのセルの元データを保存
-            undo_data = []
-            
-            # 各セルを貼り付け
-            for cell_data in paste_data:
-                # 元のセルの基準点からの相対位置を計算
-                day_offset = cell_data['day'] - min_day
-                col_offset = cell_data['col_idx'] - min_col
-                
-                # 貼り付け先の位置を計算
-                target_day = base_day + day_offset
-                target_col_idx = base_col_idx + col_offset
-                
-                # 範囲チェック
-                if target_day < 0 or (target_day > days_in_month and target_day != 0):
-                    continue
-                if target_col_idx <= 0 or target_col_idx >= len(all_columns):
-                    continue
+            if is_detail_window_data:
+                # 詳細入力ウィンドウからのデータを現在のセルに貼り付け
+                dict_key = f"{self.current_year}-{self.current_month}-{base_day}-{base_col_idx}"
+                old_data = self.data_manager.get_transaction_data(dict_key)
                 
                 # Undo用に元のデータを保存
-                dict_key = f"{self.current_year}-{self.current_month}-{target_day}-{target_col_idx}"
-                old_data = self.data_manager.get_transaction_data(dict_key)
-                undo_data.append((dict_key, old_data[:] if old_data else None))
+                self._save_undo_state('paste', [(dict_key, old_data[:] if old_data else None)])
                 
-                # データを貼り付け
-                new_data = cell_data.get('data', [])
+                # 詳細データとして保存
+                new_data_list = []
+                for row in paste_data:
+                    if isinstance(row, list) and len(row) >= 2:
+                        # [支払先, 金額, メモ] の形式
+                        safe_row = [str(v) for v in row]
+                        while len(safe_row) < 3:
+                            safe_row.append("")
+                        new_data_list.append(tuple(safe_row[:3]))
                 
-                if new_data:
-                    self.data_manager.set_transaction_data(dict_key, new_data)
-                    total = sum(parse_amount(row[1]) for row in new_data if len(row) > 1)
-                    self.update_parent_cell(f"{self.current_year}-{self.current_month}-{target_day}", target_col_idx, str(total))
-            
-            # Undo履歴に保存
-            if undo_data:
-                self._save_undo_state('paste', undo_data)
+                if new_data_list:
+                    self.data_manager.set_transaction_data(dict_key, new_data_list)
+                    total = sum(parse_amount(row[1]) for row in new_data_list if len(row) > 1)
+                    self.update_parent_cell(f"{self.current_year}-{self.current_month}-{base_day}", base_col_idx, str(total))
+            else:
+                # メインウィンドウからのデータ形式: [{"day": 1, "col_idx": 3, "data": [...]}, ...]
+                # コピー元の最小の日と列を見つける（基準点）
+                min_day = min(cell['day'] for cell in paste_data)
+                min_col = min(cell['col_idx'] for cell in paste_data)
+                
+                days_in_month = self.get_days_in_month()
+                
+                # Undo用に影響を受けるすべてのセルの元データを保存
+                undo_data = []
+                
+                # 各セルを貼り付け
+                for cell_data in paste_data:
+                    # 元のセルの基準点からの相対位置を計算
+                    day_offset = cell_data['day'] - min_day
+                    col_offset = cell_data['col_idx'] - min_col
+                    
+                    # 貼り付け先の位置を計算
+                    target_day = base_day + day_offset
+                    target_col_idx = base_col_idx + col_offset
+                    
+                    # 範囲チェック
+                    if target_day < 0 or (target_day > days_in_month and target_day != 0):
+                        continue
+                    if target_col_idx <= 0 or target_col_idx >= len(all_columns):
+                        continue
+                    
+                    # Undo用に元のデータを保存
+                    dict_key = f"{self.current_year}-{self.current_month}-{target_day}-{target_col_idx}"
+                    old_data = self.data_manager.get_transaction_data(dict_key)
+                    undo_data.append((dict_key, old_data[:] if old_data else None))
+                    
+                    # データを貼り付け
+                    new_data = cell_data.get('data', [])
+                    
+                    if new_data:
+                        self.data_manager.set_transaction_data(dict_key, new_data)
+                        total = sum(parse_amount(row[1]) for row in new_data if len(row) > 1)
+                        self.update_parent_cell(f"{self.current_year}-{self.current_month}-{target_day}", target_col_idx, str(total))
+                
+                # Undo履歴に保存
+                if undo_data:
+                    self._save_undo_state('paste', undo_data)
     
     def _delete_cells(self, event=None):
         """
@@ -1599,8 +1642,8 @@ class MainWindow:
                         total = sum(parse_amount(row[1]) for row in old_data if len(row) > 1)
                         self.update_parent_cell(f"{y}-{m}-{d}", col_idx, str(total))
         
-        elif action == 'paste':
-            # 貼り付けの取り消し：貼り付けたデータを削除し、元のデータを復元
+        elif action == 'paste' or action == 'edit_detail':
+            # 貼り付け/詳細編集の取り消し：貼り付けたデータを削除し、元のデータを復元
             for dict_key, old_data in cells:
                 if old_data is None:
                     # 元々データがなかった場合は削除

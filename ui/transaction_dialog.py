@@ -41,6 +41,10 @@ class TransactionDialog(BaseDialog):
         # メモ候補をキャッシュ（初期化時に1回だけ収集・効率化）
         self._memo_candidates_cache = None
         
+        # 元に戻す機能用
+        self.undo_stack = []  # 操作履歴 [(action_type, data), ...]
+        self.max_undo_count = 50  # 最大保持数
+        
         # キーを解析して年月日と列インデックスを取得
         parts = dict_key.split("-")
         if len(parts) == 4:
@@ -106,7 +110,9 @@ class TransactionDialog(BaseDialog):
 
         # キーボードショートカット
         self.tree.bind("<Control-c>", lambda e: self._copy_rows())
+        self.tree.bind("<Control-x>", lambda e: self._cut_rows())
         self.tree.bind("<Control-v>", lambda e: self._paste_rows())
+        self.tree.bind("<Control-z>", lambda e: self._undo())
         self.tree.bind("<Delete>", lambda e: self._delete_row())
         self.tree.bind("<space>", self._on_space_key)
         self.tree.bind("<Tab>", self._on_tab_key)
@@ -140,7 +146,10 @@ class TransactionDialog(BaseDialog):
         # 右クリックメニュー
         self.context_menu = tk.Menu(self, tearoff=0)
         self.context_menu.add_command(label="コピー (Ctrl+C)", command=self._copy_rows)
+        self.context_menu.add_command(label="切り取り (Ctrl+X)", command=self._cut_rows)
         self.context_menu.add_command(label="貼り付け (Ctrl+V)", command=self._paste_rows)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="元に戻す (Ctrl+Z)", command=self._undo)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="行を削除 (Delete)", command=self._delete_row)
         
@@ -382,11 +391,41 @@ class TransactionDialog(BaseDialog):
         
         try:
             new_value = self.entry_editor.get()
+            
+            # 現在の値を取得（変更チェック用）
+            old_values = list(self.tree.item(item_id, 'values'))
+            while len(old_values) <= col_idx:
+                old_values.append("")
+            old_value = old_values[col_idx]
+            
             self.entry_editor.destroy()
             self.entry_editor = None
             
             # 自動補完状態をリセット
             self._reset_autocomplete()
+            
+            # 値が変更されていれば元に戻す履歴を保存
+            if old_value != new_value:
+                # ダイアログ内の元に戻すスタックに保存
+                current_data = []
+                for item in self.tree.get_children():
+                    vals = self.tree.item(item, 'values')
+                    current_data.append(tuple(vals))
+                
+                self.undo_stack.append({
+                    'type': 'edit',
+                    'item_id': item_id,
+                    'col_idx': col_idx,
+                    'old_value': old_value,
+                    'new_value': new_value
+                })
+                
+                if len(self.undo_stack) > self.max_undo_count:
+                    self.undo_stack.pop(0)
+                
+                # メインウィンドウにも保存（ダイアログを閉じた後用）
+                old_data = self.parent_app.data_manager.get_transaction_data(self.dict_key)
+                self.parent_app._save_undo_state('detail_edit', [(self.dict_key, old_data[:] if old_data else None)])
             
             # 支払先の場合は履歴に追加
             if col_idx == 0 and new_value.strip():
@@ -399,6 +438,10 @@ class TransactionDialog(BaseDialog):
             
             values[col_idx] = new_value
             self.tree.item(item_id, values=values)
+            
+            # 値が変更されていれば即座にメインウィンドウに反映
+            if old_value != new_value:
+                self._apply_changes_to_parent()
             
             # 最終行に入力があったら新しい空行を追加
             all_items = self.tree.get_children()
@@ -440,15 +483,23 @@ class TransactionDialog(BaseDialog):
             self.context_menu.post(event.x_root, event.y_root)
     
     def _delete_row(self):
-        """選択された行を削除する"""
+        """選択された行を削除する（確認なし）"""
         selected_items = self.tree.selection()
         if not selected_items:
             return
-            
-        count = len(selected_items)
-        if messagebox.askyesno("確認", f"選択された {count} 件の行を削除しますか?"):
-            for item in selected_items:
-                self.tree.delete(item)
+        
+        # 元に戻す用に削除前のデータを保存
+        undo_data = []
+        for item in selected_items:
+            values = self.tree.item(item, 'values')
+            index = self.tree.index(item)
+            undo_data.append((index, list(values)))
+        
+        self._save_undo_state('delete', undo_data)
+        
+        # 削除を実行
+        for item in selected_items:
+            self.tree.delete(item)
 
     def _on_space_key(self, event):
         """
@@ -552,19 +603,32 @@ class TransactionDialog(BaseDialog):
             self.update()
 
     def _paste_rows(self):
-        """クリップボードから行を貼り付ける"""
+        """クリップボードから行を貼り付ける（メインウィンドウからの貼り付けもサポート）"""
         try:
             clipboard_text = self.clipboard_get()
         except tk.TclError:
             return
 
         new_data = []
+        is_main_window_data = False
         
-        # JSON形式（アプリ内コピー）として解析
+        # JSON形式として解析
         try:
             parsed = json.loads(clipboard_text)
             if isinstance(parsed, list):
-                new_data = parsed
+                # メインウィンドウからのコピーデータかチェック
+                if parsed and isinstance(parsed[0], dict) and 'data' in parsed[0]:
+                    # メインウィンドウからのデータ形式
+                    is_main_window_data = True
+                    # 各セルのdataフィールドから行データを取得
+                    for cell in parsed:
+                        cell_data = cell.get('data', [])
+                        for row in cell_data:
+                            if len(row) >= 2:
+                                new_data.append(row[:3] if len(row) >= 3 else row + [""])
+                else:
+                    # 詳細入力ウィンドウからのデータ形式
+                    new_data = parsed
         except json.JSONDecodeError:
             pass
             
@@ -580,8 +644,11 @@ class TransactionDialog(BaseDialog):
                         cols.append("")
                     new_data.append(cols[:3])
 
-        # データを挿入
+        # 元に戻す用に貼り付け前の状態を保存
         if new_data:
+            undo_data = []
+            insert_count = 0
+            
             for row in new_data:
                 # [支払先, 金額, メモ] の形式であることを確認
                 if isinstance(row, list) and len(row) >= 2: # 少なくとも支払先と金額
@@ -597,12 +664,66 @@ class TransactionDialog(BaseDialog):
                     
                     # 末尾が完全な空行なら、その手前に挿入
                     if last_vals and all(v == "" for v in last_vals):
-                        self.tree.insert("", items.index(last_item), values=safe_row)
+                        insert_index = items.index(last_item)
+                        self.tree.insert("", insert_index, values=safe_row)
                     else:
+                        insert_index = len(items)
                         self.tree.insert("", "end", values=safe_row)
+                    
+                    # 元に戻す用にインデックスを記録
+                    undo_data.append((insert_index + insert_count, safe_row))
+                    insert_count += 1
+            
+            # 元に戻すスタックに保存
+            if undo_data:
+                self._save_undo_state('paste', undo_data)
     
-    def _on_ok(self):
-        """OKボタンの処理"""
+
+    def _cut_rows(self):
+        """選択された行を切り取る"""
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return
+        
+        # まずコピー
+        self._copy_rows()
+        
+        # 元に戻す用にデータを保存
+        undo_data = []
+        for item in selected_items:
+            values = self.tree.item(item, 'values')
+            index = self.tree.index(item)
+            undo_data.append((index, list(values)))
+        
+        self._save_undo_state('cut', undo_data)
+        
+        # 削除
+        for item in selected_items:
+            self.tree.delete(item)
+    
+    def _save_undo_state(self, action_type, rows_data):
+        """
+        操作前の状態をundo stackに保存
+        
+        Args:
+            action_type: 'cut', 'paste', 'delete'のいずれか
+            rows_data: [(index, values), ...] の形式
+        """
+        undo_entry = {
+            'action': action_type,
+            'rows': rows_data
+        }
+        
+        self.undo_stack.append(undo_entry)
+        
+        # 最大保持数を超えたら古いものから削除
+        if len(self.undo_stack) > self.max_undo_count:
+            self.undo_stack.pop(0)
+
+    def _apply_changes_to_parent(self):
+        """
+        現在のダイアログのデータをメインウィンドウに即座に反映
+        """
         # すべての行データを収集
         all_rows = []
         for item_id in self.tree.get_children():
@@ -631,5 +752,117 @@ class TransactionDialog(BaseDialog):
             dict_key_day = f"{self.year}-{self.month}-{self.day}"
             display_value = str(total) if total != 0 else ""
             self.parent_app.update_parent_cell(dict_key_day, self.col_index, display_value)
+    
+    def _undo(self):
+        """
+        最後の操作を元に戻す (Ctrl+Z)
+        """
+        if not self.undo_stack:
+            return
+        
+        undo_entry = self.undo_stack.pop()
+        undo_type = undo_entry['type']
+        
+        if undo_type == 'edit':
+            # セル編集の取り消し
+            item_id = undo_entry['item_id']
+            col_idx = undo_entry['col_idx']
+            old_value = undo_entry['old_value']
+            
+            # 値を元に戻す
+            try:
+                values = list(self.tree.item(item_id, 'values'))
+                values[col_idx] = old_value
+                self.tree.item(item_id, values=values)
+                
+                # メインウィンドウにも反映
+                self._apply_changes_to_parent()
+                
+                # メインウィンドウの元に戻すスタックからも削除
+                if self.parent_app.undo_stack:
+                    last = self.parent_app.undo_stack[-1]
+                    if last['action'] == 'detail_edit':
+                        self.parent_app.undo_stack.pop()
+            except:
+                pass
+
+    def _reload_tree_without_clearing_selection(self):
+        """
+        選択状態を保持したままTreeviewのデータを再読み込み
+        """
+        # 現在の選択を保存
+        selected_items = self.tree.selection()
+        selected_indices = []
+        for item in selected_items:
+            try:
+                selected_indices.append(self.tree.index(item))
+            except:
+                pass
+        
+        # 既存の表示をクリア
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # データを取得
+        data_list = self.parent_app.data_manager.get_transaction_data(self.dict_key)
+        
+        if not data_list:
+            # データがない場合は空行を1つ追加
+            self.tree.insert("", "end", values=["", "", ""])
+        else:
+            # 既存データを表示
+            for row in data_list:
+                row_data = list(row) if row else ["", "", ""]
+                while len(row_data) < 3:
+                    row_data.append("")
+                self.tree.insert("", "end", values=row_data)
+            
+            # 最後に空行を追加(新規入力用)
+            self.tree.insert("", "end", values=["", "", ""])
+        
+        # 選択を復元
+        all_items = self.tree.get_children()
+        for idx in selected_indices:
+            if idx < len(all_items):
+                self.tree.selection_add(all_items[idx])
+
+    def _on_ok(self):
+        """OKボタンの処理"""
+        # 編集前のデータを保存（元に戻す用）
+        old_data = self.parent_app.data_manager.get_transaction_data(self.dict_key)
+        
+        # すべての行データを収集
+        all_rows = []
+        for item_id in self.tree.get_children():
+            values = self.tree.item(item_id, 'values')
+            row = list(values)
+            while len(row) < 3:
+                row.append("")
+            all_rows.append(tuple(row))
+        
+        # 空行を除去
+        filtered_rows = [row for row in all_rows if any(str(cell).strip() for cell in row)]
+        
+        if not filtered_rows:
+            # データが空の場合
+            dict_key_day = f"{self.year}-{self.month}-{self.day}"
+            self.parent_app.update_parent_cell(dict_key_day, self.col_index, "")
+            self.parent_app.data_manager.delete_transaction_data(self.dict_key)
+        else:
+            # データがある場合
+            self.parent_app.data_manager.set_transaction_data(self.dict_key, filtered_rows)
+            
+            # 金額列(インデックス1)を合計
+            total = sum(parse_amount(row[1]) for row in filtered_rows if len(row) > 1)
+            
+            # 親セルを更新
+            dict_key_day = f"{self.year}-{self.month}-{self.day}"
+            display_value = str(total) if total != 0 else ""
+            self.parent_app.update_parent_cell(dict_key_day, self.col_index, display_value)
+        
+        # データが変更されていればメインウィンドウの元に戻すスタックに保存
+        new_data = self.parent_app.data_manager.get_transaction_data(self.dict_key)
+        if old_data != new_data:
+            self.parent_app._save_undo_state('edit_detail', [(self.dict_key, old_data[:] if old_data else None)])
         
         self.destroy()
