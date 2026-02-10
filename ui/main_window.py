@@ -194,6 +194,7 @@ class MainWindow:
     def _on_closing(self):
         """ウィンドウが閉じられる時の処理"""
         self._save_data()
+        self.data_manager.save_backup()
         self.root.destroy()
     
     def _create_ui(self):

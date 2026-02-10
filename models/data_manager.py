@@ -50,21 +50,14 @@ class DataManager:
         """
         指定された年月のデータファイルパスを取得
         
-        Args:
-            year: 年
-            month: 月
-            
-        Returns:
-            str: データファイルのパス
+        新フォーマット: data/2025/2025_01.json
         """
         year_dir = os.path.join(self.DATA_ROOT_DIR, str(year))
-        month_dir = os.path.join(year_dir, f"{month:02d}")
         
-        # ディレクトリが存在しない場合は作成
-        if not os.path.exists(month_dir):
-            os.makedirs(month_dir, exist_ok=True)
+        if not os.path.exists(year_dir):
+            os.makedirs(year_dir, exist_ok=True)
         
-        return os.path.join(month_dir, "data.json")
+        return os.path.join(year_dir, f"{year}_{month:02d}.json")
     
     def _parse_key(self, dict_key):
         """
@@ -191,7 +184,6 @@ class DataManager:
         if not os.path.exists(self.DATA_ROOT_DIR):
             return
         
-        # data/以下の全年フォルダをスキャン
         for year_name in os.listdir(self.DATA_ROOT_DIR):
             year_path = os.path.join(self.DATA_ROOT_DIR, year_name)
             if not os.path.isdir(year_path):
@@ -202,36 +194,50 @@ class DataManager:
             except ValueError:
                 continue
             
-            # 年フォルダ内の全月フォルダをスキャン
-            for month_name in os.listdir(year_path):
-                month_path = os.path.join(year_path, month_name)
-                if not os.path.isdir(month_path):
-                    continue
+            for entry_name in os.listdir(year_path):
+                entry_path = os.path.join(year_path, entry_name)
                 
-                try:
-                    month = int(month_name)
-                except ValueError:
-                    continue
-                
-                # data.jsonを読み込み
-                data_file = os.path.join(month_path, "data.json")
-                if os.path.exists(data_file):
+                # 新フォーマット: 2025_01.json のようなファイル
+                if os.path.isfile(entry_path) and entry_name.endswith(".json"):
                     try:
-                        with open(data_file, "r", encoding="utf-8") as f:
-                            month_data = json.load(f)
-                        
-                        # 新フォーマットから旧フォーマット(メモリ用)に変換
-                        old_format = self._convert_new_to_old_format(year, month, month_data.get("data", {}))
-                        self.data.update(old_format)
-                        
-                        # 読み込み時に支払先を抽出（効率化）
-                        for data_list in old_format.values():
-                            for row in data_list:
-                                if len(row) > 0 and row[0] and str(row[0]).strip():
-                                    self.transaction_partners.add(str(row[0]).strip())
-                        
-                    except Exception as e:
-                        print(f"データ読み込みエラー ({year}/{month}): {e}")
+                        base_name = os.path.splitext(entry_name)[0]  # "2025_01"
+                        parts = base_name.split("_")
+                        if len(parts) == 2:
+                            month = int(parts[1])
+                        else:
+                            continue
+                    except ValueError:
+                        continue
+                    
+                    self._load_month_file(entry_path, year, month)
+                
+                # 旧フォルダ形式: 01/data.json (互換性のため)
+                elif os.path.isdir(entry_path):
+                    try:
+                        month = int(entry_name)
+                    except ValueError:
+                        continue
+                    
+                    data_file = os.path.join(entry_path, "data.json")
+                    if os.path.exists(data_file):
+                        self._load_month_file(data_file, year, month)
+
+    def _load_month_file(self, data_file, year, month):
+        """月別データファイルを読み込んでメモリに展開する"""
+        try:
+            with open(data_file, "r", encoding="utf-8") as f:
+                month_data = json.load(f)
+            
+            old_format = self._convert_new_to_old_format(year, month, month_data.get("data", {}))
+            self.data.update(old_format)
+            
+            for data_list in old_format.values():
+                for row in data_list:
+                    if len(row) > 0 and row[0] and str(row[0]).strip():
+                        self.transaction_partners.add(str(row[0]).strip())
+                
+        except Exception as e:
+            print(f"データ読み込みエラー ({year}/{month}): {e}")
     
     def _migrate_old_format_data(self):
         """旧フォーマットのデータを新フォーマットに移行"""
@@ -331,9 +337,45 @@ class DataManager:
             print(f"データ保存エラー ({year}/{month}): {e}")
     
     def save_data(self):
+        """全データを保存"""
+        self._save_all_month_data()
+
+    def save_backup(self):
         """
-        全データを保存(互換性のため残すが、実際は自動保存を使用)
+        全データを旧フォーマットのJSONファイルとしてbackupsフォルダに保存する。
+        アプリ終了時に呼び出される。
         """
+        if not self.data:
+            return
+        
+        from datetime import datetime
+        
+        backup_dir = os.path.join(self.JSON_DIR, "backups")
+        if not os.path.exists(backup_dir):
+            try:
+                os.makedirs(backup_dir, exist_ok=True)
+            except OSError as e:
+                print(f"バックアップフォルダ作成エラー: {e}")
+                return
+        
+        # タイムスタンプ付きファイル名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = os.path.join(backup_dir, f"data_{timestamp}.json")
+        
+        backup_data = {
+            "version": self.APP_VERSION,
+            "data": self.data
+        }
+        
+        try:
+            with open(backup_file, "w", encoding="utf-8") as f:
+                json.dump(backup_data, f, ensure_ascii=False, indent=2)
+            print(f"バックアップ保存完了: {backup_file}")
+        except Exception as e:
+            print(f"バックアップ保存エラー: {e}")
+
+    def _save_all_month_data(self):
+        """全データを年月ごとにグループ化して保存"""
         # 年月ごとにグループ化
         year_month_data = {}
         
