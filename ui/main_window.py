@@ -1174,7 +1174,8 @@ class MainWindow:
             # 該当する日付の行を検索
             for row_id in items[:-2]:  # 日付行のみ対象
                 row_vals = list(self.tree.item(row_id, 'values'))
-                if row_vals and str(row_vals[0]).strip() == str(d):
+                m = re.search(r'\d+', str(row_vals[0])) if row_vals else None
+                if m and int(m.group()) == d:
                     # 列数を確認して必要に応じて拡張
                     all_columns = self.get_all_columns()
                     while len(row_vals) < len(all_columns) + 1:
@@ -1250,7 +1251,10 @@ class MainWindow:
                 # 日付を取得
                 row_vals = self.tree.item(row_id, 'values')
                 try:
-                    day = int(re.sub(r'\D.*', '', str(row_vals[0])))
+                    m = re.search(r'\d+', str(row_vals[0]))
+                    if not m:
+                        continue
+                    day = int(m.group())
                 except ValueError:
                     continue
                 
@@ -1284,7 +1288,10 @@ class MainWindow:
                     continue
                 
                 try:
-                    day = int(str(row_vals[0]).strip())
+                    m = re.search(r'\d+', str(row_vals[0]))
+                    if not m:
+                        continue
+                    day = int(m.group())
                 except ValueError:
                     continue
                 
@@ -1325,7 +1332,10 @@ class MainWindow:
                     col_idx = 3  # 収入列
                 else:
                     try:
-                        day = int(str(row_vals[0]).strip())
+                        m = re.search(r'\d+', str(row_vals[0]))
+                        if not m:
+                            continue
+                        day = int(m.group())
                     except ValueError:
                         continue
                 

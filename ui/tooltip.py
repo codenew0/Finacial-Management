@@ -82,8 +82,13 @@ class TreeviewTooltip:
             else:
                 self._hide_tooltip()
         else:
+            import re
             try:
-                day = int(str(row_values[0]).strip())
+                m = re.search(r'\d+', str(row_values[0]))
+                if not m:
+                    self._hide_tooltip()
+                    return
+                day = int(m.group())
                 self._show_detail_tooltip(event, day, col_index)
             except ValueError:
                 self._hide_tooltip()
