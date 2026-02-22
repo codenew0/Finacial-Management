@@ -856,7 +856,10 @@ class MainWindow:
             col_name = "収入"
         else:
             try:
-                day = int(re.sub(r'\D.*', '', str(row_vals[0])))
+                m = re.search(r'\d+', str(row_vals[0]))
+                if not m:
+                    return
+                day = int(m.group())
             except:
                 return
             col_name = self.tree.heading(col_id, "text")
