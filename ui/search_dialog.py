@@ -297,9 +297,15 @@ class SearchDialog(BaseDialog):
             month = result['month']
             day = result['day']
             col_index = result['col_index']
-            
-            column_name = all_columns[col_index] if col_index < len(all_columns) else f"列{col_index}"
             date_str = f"{year}/{month:02d}/{day:02d}"
+            
+            if day == 0:
+                column_name = "収入"
+                date_str = f"{year}/{month:02d}"
+            elif col_index < len(all_columns):
+                column_name = all_columns[col_index]
+            else:
+                column_name = f"列{col_index}"
 
             # 金額の加算（統計計算をループ内で実行して二重ループを回避・効率化）
             amount_val = parse_amount(result['amount'])

@@ -18,6 +18,8 @@ from ui.monthly_data_dialog import MonthlyDataDialog
 from ui.search_dialog import SearchDialog
 from ui.chart_dialog import ChartDialog
 from utils.date_utils import get_days_in_month
+import datetime
+import re
 
 
 class MainWindow:
@@ -382,6 +384,10 @@ class MainWindow:
                                 background=TreeviewConfig.BG_NORMAL)
         self.tree.tag_configure(TreeviewConfig.TAG_ODD,
                                 background=TreeviewConfig.BG_ODD)
+        self.tree.tag_configure(TreeviewConfig.TAG_SAT,
+                                background=TreeviewConfig.BG_SAT)
+        self.tree.tag_configure(TreeviewConfig.TAG_SUN,
+                                background=TreeviewConfig.BG_SUN)
         
         # イベントバインド
         self.tree.bind("<Double-1>", self._on_double_click)
@@ -589,8 +595,15 @@ class MainWindow:
             formatted_values = self._format_row_values(row_values)
             formatted_values.append("")  # +ボタン列
             
-            # 奇数・偶数行で背景色を変える
-            tag = TreeviewConfig.TAG_ODD if day % 2 == 1 else TreeviewConfig.TAG_NORMAL
+            # 土日・奇数偶数行で背景色を変える
+            weekday = datetime.date(self.current_year, self.current_month, day).weekday()
+            if weekday == 5:  # 5=土
+                tag = TreeviewConfig.TAG_SAT
+            elif weekday == 6:  # 6=日
+                tag = TreeviewConfig.TAG_SUN
+            else:
+                tag = TreeviewConfig.TAG_ODD if day % 2 == 1 else TreeviewConfig.TAG_NORMAL
+
             self.tree.insert("", "end", values=formatted_values, tags=(tag,))
         
         # 合計行
@@ -611,7 +624,10 @@ class MainWindow:
         """特定の日の各項目の合計金額を計算する"""
         all_columns = self.get_all_columns()
         totals = [""] * len(all_columns)
-        totals[0] = str(day)  # 日付列
+        
+        weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+        wd = datetime.date(self.current_year, self.current_month, day).weekday()
+        totals[0] = f"{day}({weekdays[wd]})"  # 日付列
         
         # 各項目の合計を計算
         for col_index in range(1, len(all_columns)):
@@ -840,7 +856,7 @@ class MainWindow:
             col_name = "収入"
         else:
             try:
-                day = int(row_vals[0])
+                day = int(re.sub(r'\D.*', '', str(row_vals[0])))
             except:
                 return
             col_name = self.tree.heading(col_id, "text")
@@ -1231,7 +1247,7 @@ class MainWindow:
                 # 日付を取得
                 row_vals = self.tree.item(row_id, 'values')
                 try:
-                    day = int(str(row_vals[0]).strip())
+                    day = int(re.sub(r'\D.*', '', str(row_vals[0])))
                 except ValueError:
                     continue
                 

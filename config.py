@@ -84,13 +84,17 @@ class TreeviewConfig:
     TAG_NORMAL = "normal_row"     # 通常行(偶数)
     TAG_ODD = "odd_row"           # 通常行(奇数)
     TAG_DUPLICATE = "duplicate"   # 重複データタグ
+    TAG_SAT = "saturday"          # 土曜日タグ
+    TAG_SUN = "sunday"            # 日曜日タグ
     
     # 背景色
     BG_TOTAL = "#fff3cd"         # 合計行背景色
     BG_SUMMARY = "#d4edda"       # まとめ行背景色
-    BG_NORMAL = "white"          # 通常行背景色
+    BG_NORMAL = "white"            # 通常行背景色
     BG_ODD = "#f8f9fa"           # 奇数行背景色
     BG_DUPLICATE = "#ffcccc"     # 重複データ背景色
+    BG_SAT = "#fffef7"           # 土曜日背景色
+    BG_SUN = "#f8f8f2"           # 日曜日背景色
     
     # 列幅設定
     COL_WIDTH_DATE = 60          # 日付列
