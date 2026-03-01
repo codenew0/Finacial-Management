@@ -1002,7 +1002,10 @@ class MainWindow:
             col_name = "収入"
         else:
             try:
-                day = int(row_vals[0])
+                m = re.search(r'\d+', str(row_vals[0]))
+                if not m:
+                    return
+                day = int(m.group())
             except:
                 return
             col_name = self.tree.heading(col_id, "text")
@@ -1453,7 +1456,10 @@ class MainWindow:
                     base_col_idx = 3  # 収入列
                 else:
                     try:
-                        base_day = int(str(row_vals[0]).strip())
+                        m = re.search(r'\d+', str(row_vals[0]))
+                        if not m:
+                            return
+                        base_day = int(m.group())
                     except ValueError:
                         return
         
@@ -1494,7 +1500,10 @@ class MainWindow:
                 base_col_idx = 3  # 収入列
             else:
                 try:
-                    base_day = int(str(row_vals[0]).strip())
+                    m = re.search(r'\d+', str(row_vals[0]))
+                    if not m:
+                        return
+                    base_day = int(m.group())
                 except ValueError:
                     return
         

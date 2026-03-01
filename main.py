@@ -1,5 +1,5 @@
 # main.py
-# pyinstaller.exe .\main.py --onefile --noconsole --icon=money.ico
+# pyinstaller.exe .\main.py --onefile --noconsole --icon=money.ico --name 家計.exe
 """
 家計管理アプリケーションのエントリーポイント
 """
