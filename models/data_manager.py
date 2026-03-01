@@ -343,25 +343,33 @@ class DataManager:
     def save_backup(self):
         """
         全データを旧フォーマットのJSONファイルとしてbackupsフォルダに保存する。
+        フォルダ構造: backups/2026/12/11/data_143000.json
+        30日以上前の日付フォルダを自動削除する。
         アプリ終了時に呼び出される。
         """
         if not self.data:
             return
         
-        from datetime import datetime
+        from datetime import datetime, timedelta
         
-        backup_dir = os.path.join(self.JSON_DIR, "backups")
-        if not os.path.exists(backup_dir):
-            try:
-                os.makedirs(backup_dir, exist_ok=True)
-            except OSError as e:
-                print(f"バックアップフォルダ作成エラー: {e}")
-                return
+        now = datetime.now()
+        backup_root = os.path.join(self.JSON_DIR, "backups")
         
-        # タイムスタンプ付きファイル名
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = os.path.join(backup_dir, f"data_{timestamp}.json")
+        # 今日の日付フォルダを作成: backups/2026/12/11/
+        date_dir = os.path.join(
+            backup_root,
+            now.strftime("%Y"),
+            now.strftime("%m"),
+            now.strftime("%d")
+        )
+        try:
+            os.makedirs(date_dir, exist_ok=True)
+        except OSError as e:
+            print(f"バックアップフォルダ作成エラー: {e}")
+            return
         
+        # 時刻付きファイル名で保存
+        backup_file = os.path.join(date_dir, f"data_{now.strftime('%H%M%S')}.json")
         backup_data = {
             "version": self.APP_VERSION,
             "data": self.data
@@ -373,6 +381,38 @@ class DataManager:
             print(f"バックアップ保存完了: {backup_file}")
         except Exception as e:
             print(f"バックアップ保存エラー: {e}")
+            return
+        
+        # 30日以上前の日付フォルダを自動削除
+        cutoff = now - timedelta(days=30)
+        try:
+            for year_name in os.listdir(backup_root):
+                year_path = os.path.join(backup_root, year_name)
+                if not os.path.isdir(year_path) or not year_name.isdigit():
+                    continue
+                for month_name in os.listdir(year_path):
+                    month_path = os.path.join(year_path, month_name)
+                    if not os.path.isdir(month_path) or not month_name.isdigit():
+                        continue
+                    for day_name in os.listdir(month_path):
+                        day_path = os.path.join(month_path, day_name)
+                        if not os.path.isdir(day_path) or not day_name.isdigit():
+                            continue
+                        try:
+                            folder_date = datetime(int(year_name), int(month_name), int(day_name))
+                            if folder_date < cutoff:
+                                shutil.rmtree(day_path)
+                                print(f"古いバックアップを削除: {day_path}")
+                        except (ValueError, OSError) as e:
+                            print(f"バックアップ削除エラー: {day_path}: {e}")
+                    # 月フォルダが空になったら削除
+                    if not os.listdir(month_path):
+                        os.rmdir(month_path)
+                # 年フォルダが空になったら削除
+                if not os.listdir(year_path):
+                    os.rmdir(year_path)
+        except OSError as e:
+            print(f"古いバックアップ削除エラー: {e}")
 
     def _save_all_month_data(self):
         """全データを年月ごとにグループ化して保存"""
